@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win --x64",
+    "build:win": "electron-builder --win --x64 --publish never",
     "build:win32": "electron-builder --win --ia32",
     "build:all": "electron-builder --win --x64 --ia32"
   },

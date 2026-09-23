@@ -1,0 +1,32 @@
+name: Build TR Naja EXE (Windows)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Récupérer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Installer les dépendances
+        run: npm install
+
+      - name: Fabriquer le .exe (installateur + version portable)
+        run: npm run build:win
+
+      - name: Publier le résultat (téléchargeable depuis l'onglet Actions)
+        uses: actions/upload-artifact@v4
+        with:
+          name: TR-Naja-EXE-Windows
+          path: |
+            dist/*.exe
+          if-no-files-found: error

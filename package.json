@@ -8,8 +8,9 @@
   "scripts": {
     "start": "electron .",
     "build:win": "electron-builder --win --x64 --publish never",
-    "build:win32": "electron-builder --win --ia32",
-    "build:all": "electron-builder --win --x64 --ia32"
+    "build:win32": "electron-builder --win --ia32 --publish never",
+    "build:mac": "electron-builder --mac --publish never",
+    "build:all": "electron-builder --win --x64 --ia32 --publish never"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -18,19 +19,10 @@
   "build": {
     "appId": "com.trnaja.gestion",
     "productName": "TR Naja - Gestion",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "main.js",
-      "app/**/*",
-      "build/**/*"
-    ],
+    "directories": { "output": "dist" },
+    "files": ["main.js", "app/**/*", "build/**/*"],
     "win": {
-      "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
-      ],
+      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }],
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -39,6 +31,14 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "TR Naja - Gestion"
-    }
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": { "title": "TR Naja - Gestion", "window": { "width": 540, "height": 380 } }
   }
 }

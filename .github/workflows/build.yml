@@ -1,4 +1,4 @@
-name: Build TR Naja EXE (Windows)
+name: Build TR Naja EXE + DMG
 
 on:
   workflow_dispatch: {}
@@ -9,24 +9,29 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Récupérer le projet
-        uses: actions/checkout@v4
-
-      - name: Installer Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Installer les dépendances
-        run: npm install
-
-      - name: Fabriquer le .exe (installateur + version portable)
-        run: npm run build:win
-
-      - name: Publier le résultat (téléchargeable depuis l'onglet Actions)
-        uses: actions/upload-artifact@v4
+      - run: npm install
+      - run: npm run build:win
+      - uses: actions/upload-artifact@v4
         with:
           name: TR-Naja-EXE-Windows
-          path: |
-            dist/*.exe
+          path: dist/*.exe
+          if-no-files-found: error
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run build:mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TR-Naja-DMG-Mac
+          path: dist/*.dmg
           if-no-files-found: error

@@ -338,11 +338,17 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .tab-h{padding:10px 16px;font-size:13.5px;font-weight:600;color:var(--ink-soft);border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;}
 .tab-h.active{color:var(--green-700);border-color:var(--green-600);}
 
-.receipt{font-family:'Courier New',monospace;font-size:12px;width:280px;margin:0 auto;color:#000;}
-.receipt hr{border:none;border-top:1px dashed #000;}
+.receipt{font-family:'Courier New',monospace;font-size:19px;line-height:1.3;font-weight:700;width:100%;max-width:340px;margin:0 auto;color:#000;box-sizing:border-box;}
+.receipt, .receipt *{font-weight:700 !important;}
+.receipt hr{border:none;border-top:2px dashed #000;margin:7px 0;}
 .receipt .center{text-align:center;}
-.receipt table{font-size:11px;}
-.receipt td, .receipt th{padding:2px 0;border:none;}
+.receipt .shop{font-size:24px;}
+.receipt table{font-size:19px;width:100%;border-collapse:collapse;}
+.receipt td, .receipt th{padding:2px 0;border:none;vertical-align:top;}
+.receipt .it-name td{padding-top:6px;word-break:break-word;}
+.receipt .it-name small{font-size:15px;}
+.receipt .it-calc td{padding-bottom:4px;font-size:17px;}
+.receipt .tot td{font-size:24px;}
 
 .pdf-doc{font-family:Arial,Helvetica,sans-serif;color:#111;max-width:900px;margin:0 auto;padding:10px;}
 .pdf-doc .pdf-head{display:flex;align-items:center;gap:14px;border-bottom:3px solid #0f5233;padding-bottom:12px;margin-bottom:16px;}
@@ -361,10 +367,33 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .dot-orange{background:var(--orange);}
 .dot-red{background:var(--red);}
 
+/* Format de page à l'impression : un petit ticket ne doit PAS utiliser une page A4 entière
+   (sinon un rouleau d'imprimante thermique continue d'avancer sur une longueur de page A4,
+   gaspillant du papier avec une grande zone blanche). Plutôt que d'imposer nous-mêmes une
+   largeur fixe (ce qui peut entrer en conflit avec le format de papier déjà réglé dans le
+   pilote Windows/Mac de l'imprimante, et provoquer un retour au format A4/Lettre par défaut
+   — cause probable des impressions en 2 pages), on laisse la largeur "auto" : c'est alors le
+   format de papier choisi dans la fenêtre d'impression, ou réglé par défaut dans les
+   propriétés de l'imprimante, qui s'applique. On ne force que la hauteur à s'arrêter pile à
+   la fin du contenu, pour ne jamais gaspiller de papier, quelle que soit la largeur du rouleau. */
+@page { margin: 10mm; }
+@page receipt-page { size: 80mm 200mm; margin: 0; } /* hauteur réelle ajustée au contenu par printSaleDoc() */
+#printArea.is-receipt { page: receipt-page; }
+
 @media print{
-  body *{visibility:hidden;}
-  #printArea, #printArea *{visibility:visible;}
-  #printArea{display:block !important;position:absolute;top:0;left:0;width:100%;}
+  /* Seul le contenu de #printArea est imprimé. Tout le reste de l'application (menu, tableau de
+     bord, caisse...) est RETIRÉ de la mise en page (display:none), pas seulement rendu invisible :
+     sinon il continue de prendre de la place et crée des pages blanches en plus. */
+  html, body{margin:0 !important;padding:0 !important;width:auto !important;height:auto !important;min-height:0 !important;background:#fff !important;}
+  #loginScreen, #appShell, .sidebar, .modal-overlay, .toast-wrap{display:none !important;}
+  #printArea{display:block !important;position:static !important;margin:0;padding:0;width:auto;}
+  #printArea.is-receipt{width:72mm;margin:0 4mm;padding:2mm 0 0;}
+  #printArea.is-receipt .receipt{width:100%;max-width:none;box-sizing:border-box;}
+  /* Le ticket tient sur une seule page : aucun saut de page à l'intérieur. */
+  #printArea.is-receipt, #printArea.is-receipt .receipt{
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
 }
 #printArea{display:none;}
 
@@ -420,8 +449,6 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
       <button class="btn btn-primary btn-block" onclick="App.login()">Se connecter</button>
       <div class="login-foot">
         <button class="link-btn" onclick="App.showForgot()">Mot de passe oublié ?</button>
-        <span style="color:var(--ink-soft);"> · </span>
-        <button class="link-btn" onclick="App.showSignup()">Créer un compte</button>
       </div>
     </div>
   </div>
@@ -491,6 +518,63 @@ function roundQty(n){ n = Math.round((Number(n)||0)*10000)/10000; return Object.
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function byId(arr,id){ return (arr||[]).find(x=>x.id===id); }
 
+/* Couleurs d'alerte de stock : rouge = rupture, orange = stock faible (à commander), vert = OK */
+function stockLevelState(qty, min){ qty=Number(qty)||0; if(qty<=0) return 'red'; if(qty<=(Number(min)||0)) return 'orange'; return 'green'; }
+function stockCellStyle(qty, min){
+  const st = stockLevelState(qty, min);
+  return st==='red' ? 'background:#fdeceb;color:#c0392b;font-weight:800;'
+       : st==='orange' ? 'background:#fdf1de;color:#9a5b0f;font-weight:800;'
+       : 'background:#e6f7ec;color:#15693f;font-weight:700;';
+}
+function stockStateBadge(qty, min){
+  const st = stockLevelState(qty, min);
+  return st==='red' ? '<span class="badge badge-red">Rupture — à commander</span>'
+       : st==='orange' ? '<span class="badge badge-orange">Stock faible — à commander</span>'
+       : '<span class="badge badge-green">OK</span>';
+}
+
+/* Affiche une quantité en base sous forme lisible dans la hiérarchie d'unités du produit,
+   ex: 94 (base=Kapoaka) avec Gony=50, Paquet(Kg)=4 -> "1 Gony, 4 Kg, 4 Kapoaka" */
+function formatStockBreakdown(product, totalBaseQty){
+  if(!product || !product.units || product.units.length<2) return '';
+  let rem = Math.max(0, Math.round((totalBaseQty||0)*10000)/10000);
+  const sorted = [...product.units].sort((a,b)=>b.qtyInBase-a.qtyInBase); // grand -> petit
+  const parts = [];
+  sorted.forEach((u,i)=>{
+    const isLast = i===sorted.length-1;
+    if(isLast){
+      if(rem>0.0001 || !parts.length) parts.push(fmtNum(rem)+' '+u.name);
+      return;
+    }
+    const n = Math.floor(rem / u.qtyInBase + 1e-9);
+    if(n>0){ parts.push(n+' '+u.name); rem = roundQty(rem - n*u.qtyInBase); }
+  });
+  return parts.join(', ');
+}
+
+/* Bouteilles vides (consigne) — collectées lors des ventes "sans bouteille" (recharge) */
+function totalEmptyBottles(productId, stockFilter){
+  const levels = (DB.emptyBottles && DB.emptyBottles[productId]) || {};
+  if(stockFilter) return levels[stockFilter]||0;
+  return Object.values(levels).reduce((a,b)=>a+b,0);
+}
+function adjustEmptyBottles(productId){
+  const p = byId(DB.products, productId);
+  const stocks = DB.stocks;
+  const stockId = stocks[0] ? stocks[0].id : null;
+  const current = totalEmptyBottles(productId, stockId);
+  const val = prompt(`Nombre de bouteilles vides en stock pour "${p.name}" (${stockName(stockId)}) :`, current);
+  if(val===null) return;
+  const n = parseFloat(val);
+  if(isNaN(n) || n<0){ toast('Valeur invalide.', 'err'); return; }
+  if(!DB.emptyBottles) DB.emptyBottles = {};
+  if(!DB.emptyBottles[productId]) DB.emptyBottles[productId] = {};
+  DB.emptyBottles[productId][stockId] = roundQty(n);
+  logHistory('Bouteilles vides ajustées', `${p.name} — ${stockName(stockId)} : ${n}`);
+  saveDB(); refresh();
+  toast('Stock de bouteilles vides mis à jour.');
+}
+
 function toast(msg, type){
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
@@ -521,6 +605,8 @@ function seedDB(){
       expiryWarnDays: 30,
       nextInvoiceNo: 1,
       lastExpiryCheck: null,
+      autoBackupEnabled: true,
+      lastAutoBackup: null,
     },
     users: [
       { id: uid('u'), username:'super-adm', passwordHash: simpleHash('super123'), role:'super', fullName:'Super Administrateur', active:true, permissions:{} , secretQ:'', secretA:'', email:''},
@@ -534,6 +620,7 @@ function seedDB(){
     suppliers: [],
     products: [], // {id,code,barcode,name,categoryId,supplierId,brand,description,homeStockId,location,locationNumber,units:[{id,name,qtyInBase,priceWholesale,priceRetail,priceWithBottle,priceWithoutBottle}],purchasePrice,minThresholdBase,entryDate,expiryDate,notes,special (null|'bottle'), active}
     stockLevels: {}, // { productId: { stockId: qtyBase } }
+    emptyBottles: {}, // { productId: { stockId: nb bouteilles vides collectées } }
     sales: [], // {id,number,date,cashierId,cashierName,clientName,items:[],total,paid,change,status,cancelReason,cancelledBy,cancelledAt, isCredit}
     expenses: [],
     credits: [], // {id, clientName, phone, date, total, paid, remaining, payments:[], notes, saleId}
@@ -549,6 +636,8 @@ function seedDB(){
 function migrateDB(){
   if(!DB.notifications) DB.notifications = [];
   if(!DB.settings.lastExpiryCheck) DB.settings.lastExpiryCheck = null;
+  if(DB.settings.autoBackupEnabled===undefined) DB.settings.autoBackupEnabled = true;
+  if(DB.settings.lastAutoBackup===undefined) DB.settings.lastAutoBackup = null;
   if(!Array.isArray(DB.credits)) DB.credits = [];
   if(!Array.isArray(DB.expenses)) DB.expenses = [];
   if(!Array.isArray(DB.suppliers)) DB.suppliers = [];
@@ -561,6 +650,7 @@ function migrateDB(){
   if(!Array.isArray(DB.stocks)) DB.stocks = [];
   if(!Array.isArray(DB.cashSessions)) DB.cashSessions = [];
   if(!DB.stockLevels) DB.stockLevels = {};
+  if(!DB.emptyBottles) DB.emptyBottles = {};
   (DB.stocks||[]).forEach(s=>{ if(s.address===undefined) s.address=''; if(s.active===undefined) s.active=true; });
   (DB.credits||[]).forEach(cr=>{ if(!Array.isArray(cr.payments)) cr.payments = []; if(cr.remaining===undefined) cr.remaining = (cr.total||0)-(cr.paid||0); });
   (DB.users||[]).forEach(u=>{ if(u.email===undefined) u.email=''; if(!u.permissions) u.permissions={}; });
@@ -576,12 +666,44 @@ function loadDB(){
     DB = seedDB(); saveDB();
   }
 }
-function saveDB(){
+function saveDB(skipSyncPush){
   localStorage.setItem(DB_KEY, JSON.stringify(DB));
+  if(!skipSyncPush && typeof scheduleSyncPush==='function') scheduleSyncPush();
 }
 function logHistory(action, details){
   DB.history.unshift({ id: uid('h'), date: nowISO(), userId: SESSION.user? SESSION.user.id:null, userName: SESSION.user? SESSION.user.fullName||SESSION.user.username : 'Système', action, details: details||'' });
   if(DB.history.length > 3000) DB.history.length = 3000;
+}
+
+/* =========================================================
+   SAUVEGARDE AUTOMATIQUE
+   1) Un point de restauration interne est conservé chaque jour (7 derniers jours),
+      silencieusement, dans le navigateur — récupérable même sans fichier.
+   2) Un fichier de sauvegarde est aussi automatiquement téléchargé une fois par jour
+      (à la connexion), pour garder une copie hors du navigateur.
+========================================================= */
+const SNAPSHOT_PREFIX = 'trnaja_snapshot_';
+function saveDailySnapshot(){
+  try{
+    localStorage.setItem(SNAPSHOT_PREFIX + todayStr(), JSON.stringify(DB));
+    const allKeys = Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort();
+    while(allKeys.length > 7){ localStorage.removeItem(allKeys.shift()); }
+  }catch(e){ console.warn('Point de restauration non sauvegardé (espace de stockage plein ?)', e); }
+}
+function listSnapshots(){
+  return Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort().reverse().map(k=>k.slice(SNAPSHOT_PREFIX.length));
+}
+const AUTO_BACKUP_INTERVAL_MS = 6*60*60*1000; // toutes les 6 heures d'utilisation, pas juste 1x/jour
+function maybeRunAutoBackup(){
+  saveDailySnapshot();
+  if(DB.settings.autoBackupEnabled === false) return;
+  const last = DB.settings.lastAutoBackup ? new Date(DB.settings.lastAutoBackup).getTime() : 0;
+  if(Date.now() - last < AUTO_BACKUP_INTERVAL_MS) return; // encore récente, pas besoin
+  try{
+    downloadBackup(true);
+    DB.settings.lastAutoBackup = nowISO();
+    saveDB();
+  }catch(e){ console.warn('Sauvegarde automatique impossible :', e); }
 }
 
 /* =========================================================
@@ -605,6 +727,8 @@ function App_login(){
   SESSION.user = user;
   logHistory('Connexion', user.username);
   saveDB();
+  maybeRunAutoBackup();
+  rememberSession(user.id);
   document.getElementById('loginScreen').style.display='none';
   document.getElementById('appShell').style.display='flex';
   document.getElementById('loginUser').value=''; document.getElementById('loginPass').value='';
@@ -617,53 +741,38 @@ function App_login(){
 function App_logout(){
   if(SESSION.user){ logHistory('Déconnexion', SESSION.user.username); saveDB(); }
   SESSION.user = null;
+  forgetSession();
   document.getElementById('appShell').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
 }
 
-/* ---------- Inscription ---------- */
-function App_showSignup(){
-  openModal({
-    title: 'Créer un compte',
-    bodyHtml: `
-      <div class="form-grid">
-        <div class="field full"><label>Nom complet *</label><input id="suFullName" placeholder="ex: Naja Andriarimanana"></div>
-        <div class="field full"><label>Nom d'utilisateur *</label><input id="suUsername" placeholder="identifiant de connexion"></div>
-        <div class="field"><label>Rôle *</label>
-          <select id="suRole">
-            <option value="cashier">Caissier</option>
-            <option value="admin">Administrateur</option>
-          </select>
-        </div>
-        <div class="field"><label>E-mail *</label><input type="email" id="suEmail" placeholder="pour la récupération du mot de passe"></div>
-        <div class="field"><label>Mot de passe *</label><input type="password" id="suPassword"></div>
-        <div class="field"><label>Confirmer le mot de passe *</label><input type="password" id="suPassword2"></div>
-      </div>
-      <p class="small-note">L'e-mail sert uniquement à récupérer votre mot de passe en cas d'oubli (aucun envoi automatique n'est possible sans connexion à un serveur : le logiciel ouvrira votre messagerie pré-remplie).</p>
-    `,
-    footHtml: `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="App_doSignup()">Créer le compte</button>`
-  });
+/* ---------- Rester connecté après actualisation de la page (F5 / Cmd+R) ---------- */
+const SESSION_KEY = 'trnaja_session_v1';
+function rememberSession(userId){
+  try{ localStorage.setItem(SESSION_KEY, userId); }catch(e){}
 }
-function App_doSignup(){
-  const fullName = document.getElementById('suFullName').value.trim();
-  const username = document.getElementById('suUsername').value.trim();
-  const role = document.getElementById('suRole').value;
-  const email = document.getElementById('suEmail').value.trim();
-  const pass = document.getElementById('suPassword').value;
-  const pass2 = document.getElementById('suPassword2').value;
-  if(!fullName || !username || !email || !pass){ toast('Veuillez remplir tous les champs obligatoires.', 'err'); return; }
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ toast('Adresse e-mail invalide.', 'err'); return; }
-  if(pass.length<4){ toast('Le mot de passe doit contenir au moins 4 caractères.', 'err'); return; }
-  if(pass!==pass2){ toast('Les mots de passe ne correspondent pas.', 'err'); return; }
-  if(DB.users.some(u=>u.username.toLowerCase()===username.toLowerCase())){ toast('Ce nom d\u2019utilisateur existe déjà.', 'err'); return; }
-  const user = { id: uid('u'), username, fullName, role, passwordHash: simpleHash(pass), active:true, permissions:{}, secretQ:'', secretA:'', email };
-  DB.users.push(user);
-  logHistory('Inscription', `${fullName} (${username}) — rôle: ${role}`);
-  saveDB();
-  closeModal();
-  toast('Compte créé. Vous pouvez vous connecter.');
-  document.getElementById('loginUser').value = username;
+function forgetSession(){
+  try{ localStorage.removeItem(SESSION_KEY); }catch(e){}
 }
+function tryRestoreSession(){
+  let uid;
+  try{ uid = localStorage.getItem(SESSION_KEY); }catch(e){ return false; }
+  if(!uid) return false;
+  const user = DB.users.find(u=>u.id===uid);
+  if(!user || !user.active){ forgetSession(); return false; }
+  SESSION.user = user;
+  document.getElementById('loginScreen').style.display='none';
+  document.getElementById('appShell').style.display='flex';
+  initAppShell();
+  navigate('dashboard');
+  checkExpiryNotifications();
+  updateNotifBell();
+  return true;
+}
+
+/* Remarque sécurité : il n'y a volontairement AUCUNE inscription publique.
+   Seuls les administrateurs peuvent créer des comptes (caissiers ou autres admins),
+   depuis Paramètres → Utilisateurs. */
 
 /* ---------- Mot de passe oublié ---------- */
 function App_showForgot(){
@@ -894,7 +1003,7 @@ function estimateProfit(sale){
   let p = 0;
   sale.items.forEach(it=>{
     const prod = byId(DB.products, it.productId);
-    if(prod){ p += (it.unitPrice - (prod.purchasePrice/ (it.unitQtyInBase||1))) * it.qty; }
+    if(prod){ p += (it.unitPrice - (prod.purchasePrice * (it.unitQtyInBase||1))) * it.qty; } // prix d'achat stocké par unité de base
   });
   return p;
 }
@@ -913,23 +1022,28 @@ function totalStock(productId){
 }
 
 let DASH_STOCK_FILTER = '';
+let DASH_CHART_PERIOD = 'week';
+let DASH_PERIOD = 'day';
+let DASH_REF = null;
+
+function dashPickerHtml(){
+  if(!DASH_REF) DASH_REF = todayLocal();
+  if(DASH_PERIOD==='month') return `<input type="month" class="filter" value="${DASH_REF.slice(0,7)}" onchange="setDashRef(this.value+'-01')">`;
+  if(DASH_PERIOD==='year') return `<select class="filter" onchange="setDashRef(this.value+'-01-01')">${statsYears().map(y=>`<option value="${y}" ${String(y)===DASH_REF.slice(0,4)?'selected':''}>${y}</option>`).join('')}</select>`;
+  return `<input type="date" class="filter" value="${DASH_REF}" onchange="setDashRef(this.value)">`;
+}
+function setDashPeriod(k){ DASH_PERIOD=k; DASH_REF=todayLocal(); render_dashboard(document.getElementById('pageContent')); }
+function setDashRef(v){ if(!v) return; DASH_REF=v; render_dashboard(document.getElementById('pageContent')); }
+function isDashRefToday(){ return DASH_PERIOD==='day' && DASH_REF===todayLocal(); }
+
 function render_dashboard(c){
-  const [t0s,t0e] = dayRange(0);
-  const weekStart = new Date(); weekStart.setDate(weekStart.getDate()-6);
-  const monthStart = new Date(); monthStart.setDate(1);
-  const yearStart = new Date(); yearStart.setMonth(0,1);
-
+  if(!DASH_REF) DASH_REF = todayLocal();
   const filterStock = DASH_STOCK_FILTER;
-  const matchesStock = (sale)=> !filterStock || sale.stockId===filterStock;
-
-  const todaySales = salesBetween(t0s,t0e).filter(matchesStock);
-  const weekSales = salesBetween(weekStart.toISOString(), nowISO()).filter(matchesStock);
-  const monthSales = salesBetween(monthStart.toISOString(), nowISO()).filter(matchesStock);
-  const yearSales = salesBetween(yearStart.toISOString(), nowISO()).filter(matchesStock);
-
-  const todayExpenses = DB.expenses.filter(e=>e.date.slice(0,10)===todayStr()).reduce((a,e)=>a+e.amount,0);
+  const [pStart,pEnd] = periodBounds(DASH_PERIOD, DASH_REF);
+  const b = computeBilan(pStart.toISOString(), pEnd.toISOString(), filterStock);
   const showProfit = isAdmin() || can('seeProfit');
-  const profitToday = showProfit ? todaySales.reduce((a,s)=>a+estimateProfit(s),0) : null;
+
+  const todayExpenses = DB.expenses.filter(e=>e.date>=pStart.toISOString() && e.date<=pEnd.toISOString()).reduce((a,e)=>a+e.amount,0);
 
   let low = lowStockProducts();
   let expiring = expiringProducts(DB.settings.expiryWarnDays||30);
@@ -941,34 +1055,37 @@ function render_dashboard(c){
   const creditsTotal = creditsOpen.reduce((a,cr)=>a+cr.remaining,0);
   const session = getOpenCashSession();
 
-  const filterBar = `<div class="toolbar" style="margin-bottom:16px;">
-    <label style="font-size:13px;font-weight:600;color:var(--ink-soft);">Filtrer par magasin :</label>
+  const filterBar = `<div class="toolbar" style="margin-bottom:10px;flex-wrap:wrap;">
+    <div class="pill-row">${[['day','Jour'],['month','Mois'],['year','Année']].map(([k,l])=>`<button class="${DASH_PERIOD===k?'active':''}" onclick="setDashPeriod('${k}')">${l}</button>`).join('')}</div>
+    ${dashPickerHtml()}
+    <span class="hint" style="margin:0;">${!isDashRefToday()? '(période passée — pas "aujourd\u2019hui")':''}</span>
+    <div class="spacer"></div>
+    <label style="font-size:13px;font-weight:600;color:var(--ink-soft);">Magasin :</label>
     <select class="filter" id="dashStockFilter" onchange="DASH_STOCK_FILTER=this.value;render_dashboard(document.getElementById('pageContent'))">
       <option value="">Tous les magasins</option>
       ${DB.stocks.map(s=>`<option value="${s.id}" ${filterStock===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
     </select>
-  </div>`;
+    <button class="btn btn-gold" onclick="generateDailyReportPDF()">📄 Rapport (PDF)</button>
+  </div>
+  <h3 style="margin:0 0 14px;font-size:16px;color:var(--green-900);text-transform:capitalize;">${escapeHtml(periodTitle(DASH_PERIOD, DASH_REF))}</h3>`;
 
   let kpis = `<div class="grid grid-4">
-    <div class="kpi"><div class="lbl">Ventes du jour</div><div class="val">${fmtAr(sumSales(todaySales))}</div><div class="icon-bg">🛒</div></div>
-    <div class="kpi"><div class="lbl">Ventes — 7 derniers jours</div><div class="val">${fmtAr(sumSales(weekSales))}</div><div class="icon-bg">📈</div></div>
-    <div class="kpi"><div class="lbl">Ventes du mois</div><div class="val">${fmtAr(sumSales(monthSales))}</div><div class="icon-bg">🗓️</div></div>
-    <div class="kpi"><div class="lbl">Ventes de l'année</div><div class="val">${fmtAr(sumSales(yearSales))}</div><div class="icon-bg">📅</div></div>
+    <div class="kpi"><div class="lbl">Chiffre d'affaires</div><div class="val">${fmtAr(b.ca)}</div><div class="icon-bg">🛒</div></div>
+    <div class="kpi"><div class="lbl">Nombre de ventes</div><div class="val">${b.sales.length}</div><div class="icon-bg">🧾</div></div>
+    <div class="kpi"><div class="lbl">Bénéfice estimé</div><div class="val">${showProfit? fmtAr(b.profit) : '••••••'}</div><div class="icon-bg">💹</div></div>
+    <div class="kpi"><div class="lbl">Dépenses</div><div class="val">${fmtAr(todayExpenses)}</div><div class="icon-bg">💸</div></div>
   </div>
   <div class="grid grid-4" style="margin-top:18px;">
-    <div class="kpi">
-      <div class="lbl">Bénéfice estimé (jour)</div>
-      <div class="val">${showProfit? fmtAr(profitToday) : '••••••'}</div><div class="icon-bg">💹</div>
-    </div>
-    <div class="kpi"><div class="lbl">Dépenses du jour</div><div class="val">${fmtAr(todayExpenses)}</div><div class="icon-bg">💸</div></div>
-    <div class="kpi ${session?'':'alert'}"><div class="lbl">État de caisse</div><div class="val" style="font-size:16px;">${session? ('Ouverte — '+fmtAr(session.openingAmount)) : 'Fermée'}</div><div class="icon-bg">🗄️</div></div>
-    <div class="kpi ${creditsTotal>0?'warn':''}"><div class="lbl">Crédits en cours</div><div class="val">${fmtAr(creditsTotal)}</div><div class="icon-bg">💳</div></div>
+    <div class="kpi" style="${b.netResult<0?'color:var(--red);':''}"><div class="lbl">Résultat net estimé</div><div class="val" style="color:${b.netResult<0?'var(--red)':'var(--green-900)'};">${showProfit? fmtAr(b.netResult) : '••••••'}</div><div class="icon-bg">📊</div></div>
+    <div class="kpi ${session?'':'alert'}"><div class="lbl">État de caisse (maintenant)</div><div class="val" style="font-size:16px;">${session? ('Ouverte — '+fmtAr(session.openingAmount)) : 'Fermée'}</div><div class="icon-bg">🗄️</div></div>
+    <div class="kpi ${creditsTotal>0?'warn':''}"><div class="lbl">Crédits en cours (total actuel)</div><div class="val">${fmtAr(creditsTotal)}</div><div class="icon-bg">💳</div></div>
+    <div class="kpi ${b.cancelledSales.length?'warn':''}"><div class="lbl">Ventes annulées (période)</div><div class="val">${b.cancelledSales.length}</div><div class="icon-bg">↩️</div></div>
   </div>
   <div class="grid grid-2" style="margin-top:18px;">
     <div class="card ${low.length?'card-alert-orange':''}">
       <div class="card-head"><h3>🟠 Produits en stock faible (${low.length})</h3></div>
       ${low.length? `<div class="table-wrap"><table><thead><tr><th>Produit</th><th>Stock</th><th>Seuil</th></tr></thead><tbody>
-        ${low.slice(0,6).map(p=>`<tr><td>${escapeHtml(p.name)}</td><td style="color:var(--red);font-weight:700;">${fmtNum(filterStock?((DB.stockLevels[p.id]||{})[filterStock]||0):totalStock(p.id))}</td><td>${fmtNum(p.minThresholdBase||0)}</td></tr>`).join('')}
+        ${low.slice(0,6).map(p=>`<tr><td>${escapeHtml(p.name)}</td><td style="${stockCellStyle(filterStock?((DB.stockLevels[p.id]||{})[filterStock]||0):totalStock(p.id), p.minThresholdBase)}">${fmtNum(filterStock?((DB.stockLevels[p.id]||{})[filterStock]||0):totalStock(p.id))}</td><td>${fmtNum(p.minThresholdBase||0)}</td></tr>`).join('')}
       </tbody></table></div>${low.length>6? `<button class="link-btn" style="margin-top:8px;" onclick="showFullList('Produits en stock faible', ${JSON.stringify(low.map(p=>p.name)).replace(/"/g,'&quot;')})">Voir les ${low.length} produits →</button>`:''}`
       : `<div class="empty-state" style="padding:20px 0;">Aucun produit en stock faible.</div>`}
     </div>
@@ -981,35 +1098,21 @@ function render_dashboard(c){
     </div>
   </div>`;
 
-  // 7-day bar chart
-  let days = []; for(let i=6;i>=0;i--){ const [s,e,d]=dayRange(i); days.push({label:d.toLocaleDateString('fr-FR',{weekday:'short'}), total: sumSales(salesBetween(s,e).filter(matchesStock))}); }
-  const maxV = Math.max(1, ...days.map(d=>d.total));
+  // courbe des ventes (jour / semaine / mois / année) — indépendante du filtre de date ci-dessus, toujours "jusqu'à aujourd'hui"
+  const dSeries = salesSeries(DASH_CHART_PERIOD, todayLocal(), filterStock);
   const barChart = `<div class="card" style="margin-top:18px;">
-    <div class="card-head"><h3>Ventes — 7 derniers jours</h3></div>
-    <svg viewBox="0 0 700 220" style="width:100%;height:220px;">
-      ${days.map((d,i)=>{
-        const bw=70, gap=30, x = 20 + i*(bw+gap);
-        const h = Math.round((d.total/maxV)*150);
-        const y = 180-h;
-        return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="6" fill="url(#gGrad)"></rect>
-        <text x="${x+bw/2}" y="198" text-anchor="middle" font-size="11" fill="#4a5a51">${escapeHtml(d.label)}</text>
-        <text x="${x+bw/2}" y="${y-6}" text-anchor="middle" font-size="10" fill="#0f5233" font-weight="700">${d.total>0? Math.round(d.total/1000)+'k':''}</text>`;
-      }).join('')}
-      <defs><linearGradient id="gGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4fc47f"/><stop offset="100%" stop-color="#15693f"/></linearGradient></defs>
-    </svg>
+    <div class="card-head"><h3>📈 Courbe des ventes (jusqu'à aujourd'hui)</h3><div class="spacer"></div>
+      <span class="badge badge-green" style="margin-right:8px;">Total : ${fmtAr(dSeries.total)}</span>
+      <div class="pill-row">${[['day','Jour'],['week','Semaine'],['month','Mois'],['year','Année']].map(([k,l])=>`<button class="${DASH_CHART_PERIOD===k?'active':''}" onclick="DASH_CHART_PERIOD='${k}';render_dashboard(document.getElementById('pageContent'))">${l}</button>`).join('')}</div>
+    </div>
+    ${lineChartSvg(dSeries.points,'dash')}
   </div>`;
 
-  // top products
-  const qtyByProd = {};
-  DB.sales.filter(s=>s.status==='valid').filter(matchesStock).forEach(s=>s.items.forEach(it=>{ qtyByProd[it.productId] = (qtyByProd[it.productId]||0) + it.qty*(it.unitQtyInBase||1); }));
-  const topProducts = Object.entries(qtyByProd).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([pid,qty])=>{
-    const p = byId(DB.products,pid); return {name: p?p.name:'—', qty};
-  });
   const topHtml = `<div class="card" style="margin-top:18px;">
-    <div class="card-head"><h3>Produits les plus vendus</h3></div>
-    ${topProducts.length? `<div class="table-wrap"><table><thead><tr><th>Produit</th><th>Quantité vendue (unité de base)</th></tr></thead><tbody>
-      ${topProducts.map(t=>`<tr><td>${escapeHtml(t.name)}</td><td>${fmtNum(t.qty)}</td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty-state">Aucune vente enregistrée pour le moment.</div>'}
+    <div class="card-head"><h3>Produits les plus vendus (période sélectionnée)</h3></div>
+    ${b.top.length? `<div class="table-wrap"><table><thead><tr><th>Produit</th><th>Quantité vendue</th><th style="text-align:right;">CA</th></tr></thead><tbody>
+      ${b.top.slice(0,6).map(t=>`<tr><td>${escapeHtml(t.name)}</td><td>${fmtNum(t.qty)} ${escapeHtml(t.unit)}</td><td style="text-align:right;">${fmtAr(t.ca)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty-state">Aucune vente enregistrée sur cette période.</div>'}
   </div>`;
 
   c.innerHTML = filterBar + kpis + barChart + topHtml;
@@ -1088,10 +1191,16 @@ function renderProdTable(){
       if(days<0) expBadge = '<span class="badge badge-red">Périmé</span>';
       else if(days<=(DB.settings.expiryWarnDays||30)) expBadge = `<span class="badge badge-orange">${days} j</span>`;
     }
+    const breakdown = formatStockBreakdown(p, tot);
+    const emptyBottles = p.special==='bottle' ? totalEmptyBottles(p.id) : null;
     return `<tr>
       <td><b>${escapeHtml(p.name)}</b><br><span class="small-note">${escapeHtml(p.code||'')}</span></td>
       <td>${escapeHtml(cat?cat.name:'—')}</td>
-      <td><span class="stock-dot ${dotClass}"></span>${fmtNum(tot)} ${escapeHtml(mainUnit?mainUnit.name:'')}</td>
+      <td style="${stockCellStyle(tot, p.minThresholdBase)}">
+        <span class="stock-dot ${dotClass}"></span>${breakdown || (fmtNum(tot)+' '+escapeHtml(mainUnit?mainUnit.name:''))}
+        ${breakdown? `<div class="small-note" style="font-weight:400;">(= ${fmtNum(tot)} ${escapeHtml(mainUnit?mainUnit.name:'')})</div>` : ''}
+        ${emptyBottles!==null? `<div class="small-note" style="font-weight:400;margin-top:3px;">🍾 Bouteilles vides : <b>${fmtNum(emptyBottles)}</b> <button class="link-btn" style="font-size:11px;" onclick="adjustEmptyBottles('${p.id}')">(ajuster)</button></div>` : ''}
+      </td>
       <td>${fmtNum(p.minThresholdBase||0)}</td>
       <td>${mainUnit? fmtAr(mainUnit.priceRetail||mainUnit.priceWholesale||0) : '—'}</td>
       <td>${expTxt} ${expBadge}</td>
@@ -1148,14 +1257,14 @@ const UNIT_TEMPLATES = {
   'personnalise': { special:null, chain: [ {name:'', ratio:null} ] },
 };
 
-function unitRowHtml(u, isLast){
-  u = u || {id:uid('un'), name:'', ratio:'', priceWholesale:'', priceRetail:'', priceWithBottle:'', priceWithoutBottle:''};
+function unitRowHtml(u, isLast, isNewProduct){
+  u = u || {id:uid('un'), name:'', ratio:'', priceWholesale:'', priceRetail:'', priceWithBottle:'', priceWithoutBottle:'', purchasePriceUnit:'', initQty:''};
   return `<div class="unit-row card" style="padding:12px;margin-bottom:10px;" data-uid="${u.id}">
     <div class="unit-chain-row">
-      <input class="u-name uc-name" placeholder="Nom de l'unité (ex: Carton, Kg, Bouteille...)" value="${escapeHtml(u.name||'')}" oninput="refreshPurchaseUnitOptions()">
+      <input class="u-name uc-name" placeholder="Nom de l'unité (ex: Carton, Kg, Bouteille...)" value="${escapeHtml(u.name||'')}">
       <span class="unit-ratio-wrap" style="display:flex;align-items:center;gap:6px;${isLast?'display:none;':''}">
         <span class="unit-chain-arrow">=</span>
-        <input class="u-ratio" type="number" min="0.0001" step="any" style="width:90px;" placeholder="combien ?" value="${u.ratio!=null?u.ratio:''}" oninput="refreshPurchaseUnitOptions()">
+        <input class="u-ratio" type="number" min="0.0001" step="any" style="width:90px;" placeholder="combien ?" value="${u.ratio!=null?u.ratio:''}">
         <span class="hint" style="margin:0;">unité(s) suivante(s)</span>
       </span>
       <span class="hint base-lbl" style="margin:0;${isLast?'':'display:none;'}">→ unité de base (=1)</span>
@@ -1165,8 +1274,10 @@ function unitRowHtml(u, isLast){
       <div class="field"><label>Prix détail (Ar)</label><input class="u-pdetail" type="number" min="0" value="${u.priceRetail}"></div>
       <div class="field bottle-only" style="display:none;"><label>Prix AVEC bouteille/consigne (Ar)</label><input class="u-pbottle" type="number" min="0" value="${u.priceWithBottle}"></div>
       <div class="field bottle-only" style="display:none;"><label>Prix SANS bouteille (recharge) (Ar)</label><input class="u-pnobottle" type="number" min="0" value="${u.priceWithoutBottle}"></div>
+      <div class="field" style="background:#f3fbf6;border-radius:8px;padding:8px;"><label>💰 Prix d'achat pour cette unité (Ar)</label><input class="u-pachat" type="number" min="0" value="${u.purchasePriceUnit}" placeholder="ex: prix d'un carton"></div>
+      ${isNewProduct? `<div class="field" style="background:#f3fbf6;border-radius:8px;padding:8px;"><label>📦 Quantité initiale (dans cette unité)</label><input class="u-initqty" type="number" min="0" step="any" value="${u.initQty}" placeholder="0"></div>` : ''}
     </div>
-    <button type="button" class="btn btn-danger btn-sm" style="margin-top:6px;" onclick="this.closest('.unit-row').remove();refreshUnitChainMarkers();refreshPurchaseUnitOptions();">Retirer cette unité</button>
+    <button type="button" class="btn btn-danger btn-sm" style="margin-top:6px;" onclick="this.closest('.unit-row').remove();refreshUnitChainMarkers();">Retirer cette unité</button>
   </div>`;
 }
 
@@ -1179,19 +1290,19 @@ function refreshUnitChainMarkers(){
   });
 }
 function addUnitRow(){
-  document.getElementById('unitsWrap').insertAdjacentHTML('beforeend', unitRowHtml(null,true));
+  const isNew = !document.getElementById('unitsWrap').dataset.editing;
+  document.getElementById('unitsWrap').insertAdjacentHTML('beforeend', unitRowHtml(null,true,isNew));
   refreshUnitChainMarkers();
-  refreshPurchaseUnitOptions();
 }
 function applyUnitTemplate(){
   const key = document.getElementById('unitTemplate').value;
   const tpl = UNIT_TEMPLATES[key];
   if(!tpl) return;
-  document.getElementById('unitsWrap').innerHTML = tpl.chain.map(u=>unitRowHtml({id:uid('un'),name:u.name,ratio:u.ratio,priceWholesale:'',priceRetail:'',priceWithBottle:'',priceWithoutBottle:''})).join('');
+  const isNew = !document.getElementById('unitsWrap').dataset.editing;
+  document.getElementById('unitsWrap').innerHTML = tpl.chain.map(u=>unitRowHtml({id:uid('un'),name:u.name,ratio:u.ratio,priceWholesale:'',priceRetail:'',priceWithBottle:'',priceWithoutBottle:'',purchasePriceUnit:'',initQty:''}, false, isNew)).join('');
   refreshUnitChainMarkers();
   if(tpl.special){ document.getElementById('pdSpecial').value = tpl.special; }
   toggleBottleFields();
-  refreshPurchaseUnitOptions();
 }
 
 function toggleBottleFields(){
@@ -1199,40 +1310,19 @@ function toggleBottleFields(){
   document.querySelectorAll('.bottle-only').forEach(el=> el.style.display = special==='bottle' ? 'block':'none');
 }
 
-/* ---------- Chaîne d'unités courante (lue depuis le formulaire, pour la quantité/prix d'achat) ---------- */
-function computeQtyInBaseChain(){
-  const rows = Array.from(document.querySelectorAll('#unitsWrap .unit-row'));
-  const n = rows.length;
-  if(!n) return [];
-  const ratios = rows.map(r=> parseFloat(r.querySelector('.u-ratio').value) || null);
-  const qtyInBase = new Array(n);
-  qtyInBase[n-1] = 1;
-  for(let i=n-2;i>=0;i--){ qtyInBase[i] = (ratios[i]||1) * qtyInBase[i+1]; }
-  return rows.map((r,i)=>({ name: r.querySelector('.u-name').value.trim()||'Unité', qtyInBase: qtyInBase[i] }));
-}
-function refreshPurchaseUnitOptions(){
-  const sel = document.getElementById('pdPurchaseUnit');
-  if(!sel) return;
-  const chain = computeQtyInBaseChain();
-  if(!chain.length) return;
-  const prevIdx = sel.dataset.prevIdx!=null ? parseInt(sel.dataset.prevIdx) : sel.selectedIndex;
-  sel.innerHTML = chain.map((u,i)=>`<option value="${i}">${escapeHtml(u.name)}</option>`).join('');
-  sel.selectedIndex = Math.min(Math.max(prevIdx,0), chain.length-1);
-  sel.dataset.prevIdx = sel.selectedIndex;
-}
-function onPurchaseUnitChange(){
-  const sel = document.getElementById('pdPurchaseUnit');
-  const priceEl = document.getElementById('pdPurchasePriceUnit');
-  const chain = computeQtyInBaseChain();
-  const prevIdx = parseInt(sel.dataset.prevIdx||sel.selectedIndex);
-  const newIdx = sel.selectedIndex;
-  const oldUnit = chain[prevIdx], newUnit = chain[newIdx];
-  const curVal = parseFloat(priceEl.value);
-  if(oldUnit && newUnit && !isNaN(curVal) && oldUnit.qtyInBase>0){
-    const pricePerBase = curVal / oldUnit.qtyInBase;
-    priceEl.value = Math.round(pricePerBase * newUnit.qtyInBase);
+/* Déduit un prix d'achat "par unité de base" à partir des lignes d'unités :
+   moyenne pondérée par quantité si des quantités ont été saisies (nouveau produit),
+   sinon on se rabat sur la première unité dont le prix d'achat est renseigné. */
+function derivePurchasePricePerBase(rows){
+  const weighted = rows.filter(r=>r.qty>0 && r.price>0);
+  if(weighted.length){
+    const totalBase = weighted.reduce((a,r)=>a+r.qty*r.qtyInBase,0);
+    const totalCost = weighted.reduce((a,r)=>a+r.qty*r.price,0);
+    if(totalBase>0) return totalCost/totalBase;
   }
-  sel.dataset.prevIdx = newIdx;
+  const withPrice = rows.find(r=>r.price>0);
+  if(withPrice) return withPrice.price/(withPrice.qtyInBase||1);
+  return 0;
 }
 
 function openProductModal(id){
@@ -1244,14 +1334,12 @@ function openProductModal(id){
     const sorted = [...p.units].sort((a,b)=>b.qtyInBase-a.qtyInBase);
     chainRows = sorted.map((u,i)=>({
       id:u.id, name:u.name, ratio: i<sorted.length-1 ? (u.qtyInBase/sorted[i+1].qtyInBase) : null,
-      priceWholesale:u.priceWholesale, priceRetail:u.priceRetail, priceWithBottle:u.priceWithBottle, priceWithoutBottle:u.priceWithoutBottle
+      priceWholesale:u.priceWholesale, priceRetail:u.priceRetail, priceWithBottle:u.priceWithBottle, priceWithoutBottle:u.priceWithoutBottle,
+      purchasePriceUnit: p.purchasePrice ? Math.round(p.purchasePrice * u.qtyInBase) : '', initQty:''
     }));
   } else {
-    chainRows = [{id:uid('un'), name:'', ratio:null, priceWholesale:'',priceRetail:'',priceWithBottle:'',priceWithoutBottle:''}];
+    chainRows = [{id:uid('un'), name:'', ratio:null, priceWholesale:'',priceRetail:'',priceWithBottle:'',priceWithoutBottle:'',purchasePriceUnit:'',initQty:''}];
   }
-  // pour l'édition : unité de base = dernière de la liste triée -> prix d'achat stocké tel quel pour cette unité
-  const baseUnitIndex = chainRows.length-1;
-  const defaultPurchasePriceShown = p ? p.purchasePrice : '';
 
   const bodyHtml = `
     <div class="form-grid">
@@ -1294,16 +1382,9 @@ function openProductModal(id){
       </select>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addUnitRow()">+ Ajouter une unité</button>
     </div>
-    <p class="hint" style="margin-top:-4px;">Indiquez les unités de la plus grande à la plus petite. Pour chaque unité, précisez combien elle vaut dans l'unité suivante (ex: 1 Carton = 20 Paquets, 1 Paquet = 10 Pièces). La dernière unité de la liste devient automatiquement l'unité de base du stock — le logiciel calcule les conversions tout seul.</p>
-    <div id="unitsWrap">${chainRows.map((u,i)=>unitRowHtml(u, i===chainRows.length-1)).join('')}</div>
-    <hr class="sep">
-    <h3 style="margin:0 0 10px;font-size:14.5px;color:var(--green-900);">💰 Achat${!p?' et stock initial':''}</h3>
-    <div class="form-grid">
-      <div class="field"><label>Unité d'achat</label><select id="pdPurchaseUnit" onchange="onPurchaseUnitChange()"></select></div>
-      <div class="field"><label>Prix d'achat pour cette unité (Ar)</label><input id="pdPurchasePriceUnit" type="number" min="0" value="${defaultPurchasePriceShown}"></div>
-      ${!p? `<div class="field"><label>Quantité initiale en stock (dans cette unité)</label><input id="pdInitialQty" type="number" min="0" step="any" placeholder="0" value="0"></div>` : ''}
-    </div>
-    <p class="hint">Le prix indiqué s'entend pour l'unité choisie ci-dessus (ex: prix d'un Carton, ou d'un Kg...) — le logiciel le convertit automatiquement.</p>
+    <p class="hint" style="margin-top:-4px;">Indiquez les unités de la plus grande à la plus petite. Pour chaque unité, précisez combien elle vaut dans l'unité suivante (ex: 1 Carton = 20 Paquets, 1 Paquet = 10 Pièces). La dernière unité de la liste devient automatiquement l'unité de base du stock.
+      ${!p? ' Pour chaque unité, indiquez aussi son prix d\u2019achat et la quantité achetée au départ (ex: 2 Gony, 3 Paquet...) — le logiciel additionne tout automatiquement.' : ' Le prix d\u2019achat de chaque unité peut être ajusté ici ; pour ajouter du stock, utilisez « Entrées & transferts ».'}</p>
+    <div id="unitsWrap" data-editing="${p?'1':''}">${chainRows.map((u,i)=>unitRowHtml(u, i===chainRows.length-1, !p)).join('')}</div>
   `;
   openModal({
     title: p? 'Modifier le produit' : 'Nouveau produit',
@@ -1311,14 +1392,7 @@ function openProductModal(id){
     bodyHtml,
     footHtml: `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveProduct(${p?`'${p.id}'`:'null'})">Enregistrer</button>`
   });
-  setTimeout(()=>{
-    toggleBottleFields(); refreshUnitChainMarkers();
-    const sel = document.getElementById('pdPurchaseUnit');
-    sel.dataset.prevIdx = baseUnitIndex; // par défaut : unité de base (correspond au prix stocké tel quel)
-    refreshPurchaseUnitOptions();
-    sel.selectedIndex = baseUnitIndex;
-    sel.dataset.prevIdx = baseUnitIndex;
-  }, 0);
+  setTimeout(()=>{ toggleBottleFields(); refreshUnitChainMarkers(); }, 0);
 }
 
 function saveProduct(id){
@@ -1326,6 +1400,7 @@ function saveProduct(id){
   if(!name){ toast('Le nom du produit est obligatoire.', 'err'); return; }
   const unitRows = Array.from(document.querySelectorAll('#unitsWrap .unit-row'));
   if(!unitRows.length){ toast('Ajoutez au moins une unité.', 'err'); return; }
+  const isNewProduct = !id;
   // Lecture de la chaîne de conversion (de la plus grande à la plus petite unité)
   const rawChain = unitRows.map(r=>({
     id: r.dataset.uid,
@@ -1335,6 +1410,8 @@ function saveProduct(id){
     priceRetail: parseFloat(r.querySelector('.u-pdetail').value)||0,
     priceWithBottle: parseFloat(r.querySelector('.u-pbottle').value)||0,
     priceWithoutBottle: parseFloat(r.querySelector('.u-pnobottle').value)||0,
+    purchasePriceUnit: parseFloat(r.querySelector('.u-pachat').value)||0,
+    initQty: isNewProduct && r.querySelector('.u-initqty') ? (parseFloat(r.querySelector('.u-initqty').value)||0) : 0,
   }));
   // Vérifie que chaque unité (sauf la dernière) a bien un ratio renseigné
   for(let i=0;i<rawChain.length-1;i++){
@@ -1348,18 +1425,19 @@ function saveProduct(id){
   const qtyInBaseArr = new Array(n);
   qtyInBaseArr[n-1] = 1;
   for(let i=n-2;i>=0;i--){ qtyInBaseArr[i] = rawChain[i].ratio * qtyInBaseArr[i+1]; }
-  const chainWithBase = rawChain.map((u,i)=>({ name:u.name, qtyInBase: qtyInBaseArr[i] }));
   const units = rawChain.map((u,i)=>({
     id: u.id, name: u.name, qtyInBase: qtyInBaseArr[i],
     priceWholesale: u.priceWholesale, priceRetail: u.priceRetail,
     priceWithBottle: u.priceWithBottle, priceWithoutBottle: u.priceWithoutBottle,
   })).sort((a,b)=>a.qtyInBase-b.qtyInBase); // on stocke ensuite de la plus petite (base) à la plus grande
 
-  // Prix d'achat : converti depuis l'unité choisie vers le prix "par unité de base"
-  const purchaseUnitIdx = parseInt(document.getElementById('pdPurchaseUnit').value)||0;
-  const purchaseUnit = chainWithBase[purchaseUnitIdx] || chainWithBase[chainWithBase.length-1];
-  const purchasePriceForUnit = parseFloat(document.getElementById('pdPurchasePriceUnit').value)||0;
-  const purchasePricePerBase = purchaseUnit.qtyInBase>0 ? purchasePriceForUnit/purchaseUnit.qtyInBase : purchasePriceForUnit;
+  // Prix d'achat par unité de base : moyenne pondérée des lignes saisies
+  const purchasePricePerBase = derivePurchasePricePerBase(
+    rawChain.map((u,i)=>({ price:u.purchasePriceUnit, qty:u.initQty, qtyInBase:qtyInBaseArr[i] }))
+  );
+  // Quantité initiale totale (en unité de base), toutes lignes confondues
+  const totalInitQtyBase = rawChain.reduce((a,u,i)=>a + u.initQty*qtyInBaseArr[i], 0);
+  const initBreakdown = rawChain.filter(u=>u.initQty>0).map(u=>`${fmtNum(u.initQty)} ${u.name}`).join(', ');
 
   const data = {
     name,
@@ -1384,16 +1462,13 @@ function saveProduct(id){
     const p = { id: uid('p'), entryDate: nowISO(), code:'', barcode:'', brand:'', location:'', locationNumber:'', ...data };
     DB.products.push(p);
     if(!DB.stockLevels[p.id]) DB.stockLevels[p.id] = {};
-    const initQtyEl = document.getElementById('pdInitialQty');
-    const initQtyInPurchaseUnit = initQtyEl ? (parseFloat(initQtyEl.value)||0) : 0;
-    const initQtyBase = initQtyInPurchaseUnit * (purchaseUnit.qtyInBase||1);
-    if(initQtyBase > 0){
-      DB.stockLevels[p.id][p.homeStockId] = roundQty(initQtyBase);
-      DB.stockMovements.unshift({id:uid('mv'), type:'entry', productId:p.id, productName:p.name, qty:roundQty(initQtyBase), fromStock:null, toStock:p.homeStockId, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Stock initial à la création du produit'});
+    if(totalInitQtyBase > 0){
+      DB.stockLevels[p.id][p.homeStockId] = roundQty(totalInitQtyBase);
+      DB.stockMovements.unshift({id:uid('mv'), type:'entry', productId:p.id, productName:p.name, qty:roundQty(totalInitQtyBase), fromStock:null, toStock:p.homeStockId, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Stock initial à la création ('+initBreakdown+')'});
     }
     addNotification('product', `Nouveau produit créé : ${p.name}`);
     logHistory('Produit créé', p.name);
-    toast('Produit créé' + (initQtyBase>0? ' avec stock initial de '+fmtNum(initQtyBase)+'.':'.'));
+    toast('Produit créé' + (totalInitQtyBase>0? ' avec stock initial de '+initBreakdown+'.':'.'));
   }
   saveDB();
   closeModal();
@@ -1634,8 +1709,25 @@ function confirmImport(){
    POS — VENTE
 ========================================================= */
 let POS_MODE = 'detail'; // 'gros' | 'detail'
-let POS_STOCK = null;
+let POS_STOCK = ''; // '' = Tous les stocks (par défaut)
 let POS_SEARCH = '';
+let POS_DOC = 'ticket'; // 'ticket' | 'invoice'
+
+/* Choisit automatiquement le magasin le mieux approvisionné pour un produit,
+   utilisé quand le caissier travaille en mode "Tous les stocks". */
+function bestStockForProduct(productId){
+  const levels = DB.stockLevels[productId] || {};
+  let best = null, bestQty = -1;
+  DB.stocks.forEach(s=>{
+    const q = levels[s.id]||0;
+    if(q > bestQty){ bestQty = q; best = s.id; }
+  });
+  if(bestQty<=0){
+    const p = byId(DB.products, productId);
+    if(p && p.homeStockId) return p.homeStockId;
+  }
+  return best || (DB.stocks[0] ? DB.stocks[0].id : null);
+}
 
 function render_pos(c){
   const session = getOpenCashSession();
@@ -1647,13 +1739,13 @@ function render_pos(c){
     </div></div>`;
     return;
   }
-  if(!POS_STOCK) POS_STOCK = DB.stocks[0] ? DB.stocks[0].id : null;
   c.innerHTML = `
   <div class="pos-wrap">
     <div>
       <div class="toolbar">
         <div class="search-box" style="flex:1;">🔎 <input id="posSearch" placeholder="Rechercher un produit..." oninput="POS_SEARCH=this.value;renderPosGrid();"></div>
         <select class="filter" id="posStockSel" onchange="POS_STOCK=this.value;renderPosGrid();">
+          <option value="">Tous les stocks</option>
           ${DB.stocks.map(s=>`<option value="${s.id}" ${POS_STOCK===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
         </select>
         <div class="pill-row">
@@ -1670,12 +1762,26 @@ function render_pos(c){
       <div id="cartTotals"></div>
       <div class="field" style="margin-top:10px;"><label>Montant payé (Ar)</label><input id="posPaid" type="number" min="0" oninput="renderCartTotalsOnly()"></div>
       <div id="changeRow" class="small-note"></div>
-      <button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="finalizeSale(false)">✅ Valider la vente</button>
-      <button class="btn btn-gold btn-block" style="margin-top:8px;" onclick="finalizeSale(true)">💳 Vente à crédit</button>
+      <div class="field" style="margin-top:10px;"><label>Document à produire</label>
+        <div class="pill-row" id="posDocPills">
+          <button class="${POS_DOC==='ticket'?'active':''}" onclick="setPosDoc('ticket')">🧾 Ticket</button>
+          <button class="${POS_DOC==='invoice'?'active':''}" onclick="setPosDoc('invoice')">📄 Facture A4</button>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" style="margin-top:12px;" onclick="finalizeSale(false,'save')">💾 Enregistrer</button>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+        <button class="btn btn-ghost" onclick="finalizeSale(false,'print')">🖨️ Enregistrer + Imprimer</button>
+        <button class="btn btn-ghost" onclick="finalizeSale(false,'download')">⬇️ Enregistrer + Télécharger</button>
+      </div>
+      <button class="btn btn-gold btn-block" style="margin-top:8px;" onclick="finalizeSale(true,'save')">💳 Vente à crédit</button>
     </div>
   </div>`;
   renderPosGrid();
   renderCart();
+}
+function setPosDoc(fmt){
+  POS_DOC = fmt;
+  document.querySelectorAll('#posDocPills button').forEach((b,i)=> b.classList.toggle('active', (i===0)===(fmt==='ticket')));
 }
 
 function renderPosGrid(){
@@ -1684,17 +1790,17 @@ function renderPosGrid(){
   let list = DB.products.filter(p=>p.active!==false);
   if(POS_SEARCH){ const q=POS_SEARCH.toLowerCase(); list = list.filter(p=>p.name.toLowerCase().includes(q) || (p.code||'').toLowerCase().includes(q) || (p.barcode||'').toLowerCase().includes(q)); }
   if(!list.length){ grid.innerHTML = '<div class="empty-state">Aucun produit.</div>'; return; }
+  const allStocks = POS_STOCK==='';
   grid.innerHTML = list.map(p=>{
-    const stockQty = (DB.stockLevels[p.id]||{})[POS_STOCK] || 0;
-    const totalAllStores = totalStock(p.id);
+    const stockQty = allStocks ? totalStock(p.id) : ((DB.stockLevels[p.id]||{})[POS_STOCK] || 0);
     const mainUnit = p.units[0];
     const price = POS_MODE==='gros' ? (mainUnit.priceWholesale||mainUnit.priceRetail) : (mainUnit.priceRetail||mainUnit.priceWholesale);
-    const elsewhereHint = (stockQty<=0 && totalAllStores>stockQty) ? `<div class="hint" style="margin-top:2px;color:var(--orange);">Stock disponible dans un autre magasin (${fmtNum(totalAllStores)} au total) — faites un transfert.</div>` : '';
+    const breakdown = allStocks ? formatStockBreakdown(p, stockQty) : '';
     return `<div class="prod-card" onclick="addToCart('${p.id}')">
       <div class="pname">${escapeHtml(p.name)}</div>
       <div class="pmeta">${escapeHtml(mainUnit.name)} — ${fmtAr(price)}</div>
-      <div class="pstock" style="color:${stockQty<=0?'var(--red)':stockQty<=(p.minThresholdBase||0)?'var(--orange)':'var(--green-700)'}">Stock ici : ${fmtNum(stockQty)}</div>
-      ${elsewhereHint}
+      <div class="pstock" style="${stockCellStyle(stockQty, p.minThresholdBase).replace('font-weight:800;','')}display:inline-block;padding:2px 6px;border-radius:6px;">${allStocks? 'Stock total : '+fmtNum(stockQty) : 'Stock ici : '+fmtNum(stockQty)}</div>
+      ${breakdown? `<div class="hint" style="margin-top:2px;">${breakdown}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -1705,12 +1811,15 @@ function addToCart(productId){
   const unit = p.units[0];
   let withBottle = null;
   if(p.special==='bottle') withBottle = true; // par défaut avec bouteille, modifiable dans le panier
-  const existing = CART.find(it=>it.productId===productId && it.unitId===unit.id && it.withBottle===withBottle);
+  const stockId = POS_STOCK || bestStockForProduct(productId);
+  const stockNm = stockName(stockId);
+  const existing = CART.find(it=>it.productId===productId && it.unitId===unit.id && it.withBottle===withBottle && it.stockId===stockId);
   if(existing){ existing.qty += 1; }
   else {
-    CART.push({ productId, productName:p.name, unitId:unit.id, unitName:unit.name, unitQtyInBase:unit.qtyInBase, qty:1, mode:POS_MODE, withBottle, special:p.special });
+    CART.push({ productId, productName:p.name, unitId:unit.id, unitName:unit.name, unitQtyInBase:unit.qtyInBase, qty:1, mode:POS_MODE, withBottle, special:p.special, stockId, stockName: stockNm });
   }
   renderCart();
+  if(POS_STOCK===''){ toast('Prélevé depuis « '+stockNm+' » (magasin le mieux approvisionné).'); }
 }
 
 function unitPriceFor(item){
@@ -1731,7 +1840,7 @@ function renderCart(){
     const unitPrice = unitPriceFor(it);
     return `<div class="cart-item">
       <div class="ci-name">
-        <div>${escapeHtml(it.productName)}</div>
+        <div>${escapeHtml(it.productName)} ${POS_STOCK===''? `<span class="badge badge-gray" style="font-size:10px;">${escapeHtml(it.stockName||stockName(it.stockId))}</span>`:''}</div>
         <div>
           <select onchange="changeCartUnit(${i}, this.value)" style="font-size:11px;border:1px solid var(--line);border-radius:6px;">
             ${p.units.map(u=>`<option value="${u.id}" ${u.id===it.unitId?'selected':''}>${escapeHtml(u.name)}</option>`).join('')}
@@ -1788,14 +1897,14 @@ function nextInvoiceNumber(){
   return String(n).padStart(6,'0');
 }
 
-function finalizeSale(isCredit){
+function finalizeSale(isCredit, after){
   if(!CART.length){ toast('Le panier est vide.', 'err'); return; }
-  // vérifier stock suffisant
+  // vérifier stock suffisant (magasin résolu par article)
   for(const it of CART){
-    const avail = (DB.stockLevels[it.productId]||{})[POS_STOCK] || 0;
+    const avail = (DB.stockLevels[it.productId]||{})[it.stockId] || 0;
     const needed = it.qty * it.unitQtyInBase;
     if(needed > avail + 0.0001){
-      toast(`Stock insuffisant pour ${it.productName} (disponible: ${fmtNum(avail)}).`, 'err');
+      toast(`Stock insuffisant pour ${it.productName} dans « ${stockName(it.stockId)} » (disponible: ${fmtNum(avail)}).`, 'err');
       return;
     }
   }
@@ -1812,19 +1921,27 @@ function finalizeSale(isCredit){
   const sale = {
     id: uid('s'), number: nextInvoiceNumber(), date: nowISO(),
     cashierId: SESSION.user.id, cashierName: SESSION.user.fullName||SESSION.user.username, cashierUsername: SESSION.user.username,
-    clientName: clientName || 'Client comptoir', stockId: POS_STOCK,
-    items: CART.map(it=>({ productId:it.productId, name:it.productName, unitId:it.unitId, unitName:it.unitName, unitQtyInBase:it.unitQtyInBase, qty:it.qty, unitPrice: unitPriceFor(it), mode:it.mode, withBottle:it.withBottle })),
+    clientName: clientName || 'Client comptoir', stockId: (POS_STOCK || (CART.length===1 ? CART[0].stockId : '')),
+    items: CART.map(it=>({ productId:it.productId, name:it.productName, unitId:it.unitId, unitName:it.unitName, unitQtyInBase:it.unitQtyInBase, qty:it.qty, unitPrice: unitPriceFor(it), mode:it.mode, withBottle:it.withBottle, stockId:it.stockId })),
     total, paid, change: Math.max(0,paid-total), status:'valid', isCredit: !!isCredit,
   };
-  // déduire le stock
+  // déduire le stock (dans le magasin propre à chaque article)
   CART.forEach(it=>{
-    const wasAbove = ((DB.stockLevels[it.productId][POS_STOCK]||0)) > (byId(DB.products,it.productId).minThresholdBase||0);
-    DB.stockLevels[it.productId][POS_STOCK] = roundQty((DB.stockLevels[it.productId][POS_STOCK]||0) - it.qty*it.unitQtyInBase);
-    DB.stockMovements.unshift({id:uid('mv'), type:'sale', productId:it.productId, productName:it.productName, qty: -(it.qty*it.unitQtyInBase), fromStock:POS_STOCK, toStock:null, date: nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Vente '+sale.number});
-    const nowLevel = DB.stockLevels[it.productId][POS_STOCK]||0;
+    const sId = it.stockId;
+    const wasAbove = ((DB.stockLevels[it.productId][sId]||0)) > (byId(DB.products,it.productId).minThresholdBase||0);
+    DB.stockLevels[it.productId][sId] = roundQty((DB.stockLevels[it.productId][sId]||0) - it.qty*it.unitQtyInBase);
+    DB.stockMovements.unshift({id:uid('mv'), type:'sale', productId:it.productId, productName:it.productName, qty: -(it.qty*it.unitQtyInBase), fromStock:sId, toStock:null, date: nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Vente '+sale.number});
+    const nowLevel = DB.stockLevels[it.productId][sId]||0;
     const prod = byId(DB.products,it.productId);
     if(wasAbove && nowLevel <= (prod.minThresholdBase||0)){
-      addNotification('lowstock', `Stock faible : ${prod.name} (${fmtNum(nowLevel)} restant(s)).`);
+      addNotification('lowstock', `Stock faible : ${prod.name} (${fmtNum(nowLevel)} restant(s)) dans ${stockName(sId)}.`);
+    }
+    // Gaz/consigne : une vente "sans bouteille" (recharge) signifie que le client apporte sa bouteille vide
+    // en échange d'une pleine -> le magasin récupère une bouteille vide.
+    if(prod.special==='bottle' && it.withBottle===false){
+      if(!DB.emptyBottles) DB.emptyBottles = {};
+      if(!DB.emptyBottles[it.productId]) DB.emptyBottles[it.productId] = {};
+      DB.emptyBottles[it.productId][sId] = roundQty((DB.emptyBottles[it.productId][sId]||0) + it.qty*it.unitQtyInBase);
     }
   });
   DB.sales.unshift(sale);
@@ -1837,42 +1954,124 @@ function finalizeSale(isCredit){
   addNotification('sale', `Nouvelle vente ${sale.number} — ${sale.clientName} — ${fmtAr(total)}`);
   logHistory('Vente enregistrée', `Facture ${sale.number} — ${fmtAr(total)}`);
   saveDB();
+  maybeRunAutoBackup();
   CART = [];
-  printReceipt(sale);
   refresh();
-  toast('Vente enregistrée : facture n°'+sale.number);
+  toast('Vente enregistrée : n°'+sale.number);
+  if(after==='print' || after==='download'){
+    printSaleDoc(sale, POS_DOC, after);
+  } else {
+    showReceiptModal(sale);
+  }
 }
 
-function printReceipt(sale){
-  const area = document.getElementById('printArea');
-  const cashierId = sale.cashierUsername || sale.cashierId || '';
-  area.innerHTML = `<div class="receipt">
-    <div class="center"><img src="${LOGO_B64}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;" alt="logo"><br>
-    <b style="font-size:14px;">${escapeHtml(DB.settings.shopName||'TR Naja')}</b><br>
-    <span style="font-size:10px;">Vente en gros et en détail</span></div>
+function buildReceiptHtml(sale){
+  const shop = escapeHtml(DB.settings.shopName||'TR Naja');
+  const reste = sale.total - sale.paid;
+  return `<div class="receipt">
+    <div class="center"><img src="${LOGO_B64}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" alt="logo"><br>
+    <span class="shop">${shop}</span></div>
     <hr>
-    Ticket n° ${escapeHtml(sale.number)}<br>
-    Date : ${fmtDate(sale.date)}<br>
-    Caissier : ${escapeHtml(sale.cashierName)} (${escapeHtml(cashierId)})<br>
+    N° ${escapeHtml(sale.number)}<br>
+    ${fmtDate(sale.date)}<br>
+    Caissier : ${escapeHtml(sale.cashierName)}<br>
     Client : ${escapeHtml(sale.clientName)}
     <hr>
-    <table style="width:100%;">
-      <thead><tr><th style="text-align:left;">Article</th><th>Qté</th><th style="text-align:right;">Prix</th></tr></thead>
-      <tbody>
-      ${sale.items.map(it=>`<tr><td colspan="3" style="padding-top:6px;">${escapeHtml(it.name)} (${escapeHtml(it.unitName)})</td></tr>
-      <tr><td></td><td style="text-align:center;">${fmtNum(it.qty)}</td><td style="text-align:right;">${fmtAr(it.qty*it.unitPrice)}</td></tr>`).join('')}
-      </tbody>
+    <table>
+      ${sale.items.map(it=>`<tr class="it-name"><td colspan="2">${escapeHtml(it.name)} <small>(${escapeHtml(it.unitName)})</small></td></tr>
+      <tr class="it-calc"><td>${fmtNum(it.qty)} x ${fmtAr(it.unitPrice)}</td><td style="text-align:right;">${fmtAr(it.qty*it.unitPrice)}</td></tr>`).join('')}
     </table>
     <hr>
-    <table style="width:100%;font-size:13px;">
-      <tr><td><b>TOTAL</b></td><td style="text-align:right;"><b>${fmtAr(sale.total)}</b></td></tr>
+    <table>
+      <tr class="tot"><td>TOTAL</td><td style="text-align:right;">${fmtAr(sale.total)}</td></tr>
       <tr><td>Payé</td><td style="text-align:right;">${fmtAr(sale.paid)}</td></tr>
-      ${sale.isCredit && sale.total-sale.paid>0 ? `<tr><td>Reste (crédit)</td><td style="text-align:right;">${fmtAr(sale.total-sale.paid)}</td></tr>` : `<tr><td>Monnaie</td><td style="text-align:right;">${fmtAr(sale.change)}</td></tr>`}
+      ${sale.isCredit && reste>0 ? `<tr><td>Reste (crédit)</td><td style="text-align:right;">${fmtAr(reste)}</td></tr>` : `<tr><td>Monnaie</td><td style="text-align:right;">${fmtAr(sale.change)}</td></tr>`}
     </table>
     <hr>
-    <div class="center">Merci de votre confiance !<br>À bientôt chez ${escapeHtml(DB.settings.shopName||'TR Naja')}</div>
+    <div class="center">Merci de votre confiance !<br>À bientôt chez ${shop}</div>
   </div>`;
+}
+
+function buildInvoiceHtml(sale){
+  const cashierId = sale.cashierUsername || sale.cashierId || '';
+  const shop = escapeHtml(DB.settings.shopName||'TR Naja');
+  const reste = sale.total - sale.paid;
+  return `<div class="pdf-doc">
+    <div class="pdf-head">
+      <img src="${LOGO_B64}" alt="logo">
+      <div><h1>${shop}</h1><div class="pdf-sub">Vente en gros et en détail</div></div>
+      <div style="margin-left:auto;text-align:right;">
+        <div style="font-size:22px;font-weight:800;color:#0f5233;letter-spacing:1px;">FACTURE</div>
+        <div style="font-size:12px;">N° ${escapeHtml(sale.number)}</div>
+        <div style="font-size:12px;">${fmtDate(sale.date)}</div>
+      </div>
+    </div>
+    <table style="margin-bottom:14px;"><tbody>
+      <tr><td style="width:50%;"><b>Client :</b> ${escapeHtml(sale.clientName)}</td><td><b>Caissier :</b> ${escapeHtml(sale.cashierName)} (${escapeHtml(cashierId)})</td></tr>
+    </tbody></table>
+    <table>
+      <thead><tr><th>#</th><th>Désignation</th><th>Unité</th><th style="text-align:right;">Qté</th><th style="text-align:right;">Prix unitaire</th><th style="text-align:right;">Montant</th></tr></thead>
+      <tbody>${sale.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.unitName)}</td><td style="text-align:right;">${fmtNum(it.qty)}</td><td style="text-align:right;">${fmtAr(it.unitPrice)}</td><td style="text-align:right;">${fmtAr(it.qty*it.unitPrice)}</td></tr>`).join('')}</tbody>
+    </table>
+    <table style="width:55%;margin-left:auto;">
+      <tr><td><b>TOTAL</b></td><td style="text-align:right;"><b>${fmtAr(sale.total)}</b></td></tr>
+      <tr><td>Montant payé</td><td style="text-align:right;">${fmtAr(sale.paid)}</td></tr>
+      ${sale.isCredit && reste>0 ? `<tr><td>Reste à payer (crédit)</td><td style="text-align:right;">${fmtAr(reste)}</td></tr>` : `<tr><td>Monnaie rendue</td><td style="text-align:right;">${fmtAr(sale.change)}</td></tr>`}
+    </table>
+    <p style="text-align:center;margin-top:24px;font-size:13px;">Merci de votre confiance !<br>À bientôt chez ${shop}</p>
+  </div>`;
+}
+
+function saleDocHtml(sale, fmt){ return fmt==='invoice' ? buildInvoiceHtml(sale) : buildReceiptHtml(sale); }
+
+/* Impression / téléchargement PDF : la fenêtre d'impression du navigateur propose
+   à la fois une imprimante et "Enregistrer au format PDF" (téléchargement). */
+/* Hauteur du ticket = hauteur réelle du contenu : le papier ne sort ni trop long, ni sur 2 pages. */
+function fitReceiptPageHeight(area){
+  let st = document.getElementById('receiptPageDyn');
+  if(!st){ st = document.createElement('style'); st.id = 'receiptPageDyn'; document.head.appendChild(st); }
+  const keep = area.getAttribute('style');
+  area.style.cssText = 'display:block;position:absolute;visibility:hidden;left:-9999px;top:0;width:72mm;padding:2mm 0 0;';
+  const px = area.scrollHeight;
+  if(keep===null) area.removeAttribute('style'); else area.setAttribute('style', keep);
+  const mm = Math.max(50, Math.ceil(px * 25.4 / 96) + 10); // +10 mm de marge de sécurité avant la coupe
+  st.textContent = '@page receipt-page { size: 80mm ' + mm + 'mm; margin: 0; }';
+}
+function resetReceiptPageHeight(){ const st = document.getElementById('receiptPageDyn'); if(st) st.textContent=''; }
+
+/* Impression / téléchargement PDF : la fenêtre d'impression du navigateur propose
+   à la fois une imprimante et "Enregistrer au format PDF" (téléchargement). */
+function printSaleDoc(sale, fmt, mode){
+  const area = document.getElementById('printArea');
+  area.innerHTML = saleDocHtml(sale, fmt);
+  area.className = fmt==='invoice' ? '' : 'is-receipt'; // format papier étroit uniquement pour le petit ticket
+  if(fmt==='invoice') resetReceiptPageHeight(); else fitReceiptPageHeight(area);
+  const oldTitle = document.title;
+  document.title = (fmt==='invoice'?'Facture_':'Ticket_') + sale.number; // nom de fichier PDF proposé
+  const restore = ()=>{ document.title = oldTitle; window.removeEventListener('afterprint', restore); };
+  window.addEventListener('afterprint', restore);
+  if(mode==='download') toast('Dans la fenêtre qui s\u2019ouvre, choisissez "Enregistrer au format PDF" comme destination.', 'warn');
   setTimeout(()=>{ window.print(); }, 150);
+}
+function printReceipt(sale){ printSaleDoc(sale, 'ticket', 'print'); }
+
+let RECEIPT_FORMAT = 'ticket';
+function showReceiptModal(sale, fmt){
+  if(fmt) RECEIPT_FORMAT = fmt; else RECEIPT_FORMAT = POS_DOC || 'ticket';
+  const f = RECEIPT_FORMAT;
+  openModal({
+    title: (sale.status==='cancelled'?'❌ Vente annulée — ':'✅ Vente enregistrée — ') + 'n° ' + sale.number,
+    large: f==='invoice',
+    bodyHtml: `<div class="pill-row" style="margin-bottom:12px;">
+        <button class="${f==='ticket'?'active':''}" onclick="showReceiptModal(byId(DB.sales,'${sale.id}'),'ticket')">🧾 Ticket</button>
+        <button class="${f==='invoice'?'active':''}" onclick="showReceiptModal(byId(DB.sales,'${sale.id}'),'invoice')">📄 Facture A4</button>
+      </div>
+      <div style="background:#f7f7f7;border-radius:10px;padding:16px 0;">${saleDocHtml(sale, f)}</div>
+      <p class="small-note" style="margin-top:12px;">« Imprimer » envoie le document à l'imprimante. « Télécharger » ouvre la même fenêtre : choisissez « Enregistrer au format PDF » comme destination.</p>`,
+    footHtml: `<button class="btn btn-ghost" onclick="closeModal()">💾 Enregistrer et fermer</button>
+      <button class="btn btn-ghost" onclick="printSaleDoc(byId(DB.sales,'${sale.id}'), RECEIPT_FORMAT, 'download')">⬇️ Télécharger</button>
+      <button class="btn btn-primary" onclick="printSaleDoc(byId(DB.sales,'${sale.id}'), RECEIPT_FORMAT, 'print')">🖨️ Imprimer</button>`
+  });
 }
 
 /* =========================================================
@@ -1933,10 +2132,10 @@ function renderSalesTable(){
       <td>${escapeHtml(s.clientName)}</td>
       <td>${escapeHtml(s.cashierName)}</td>
       <td>${fmtAr(s.total)}</td>
-      <td>${s.status==='valid'? (s.isCredit?'<span class="badge badge-gold">Crédit</span>':'<span class="badge badge-green">Validée</span>') : '<span class="badge badge-red">Annulée</span>'}</td>
+      <td>${s.status==='valid'? (s.isCredit?'<span class="badge badge-gold">Crédit</span>':'<span class="badge badge-green">Validée</span>') : `<span class="badge badge-red">Annulée</span><div class="small-note" style="margin-top:3px;">Motif : ${escapeHtml(s.cancelReason||'—')}<br>par ${escapeHtml(s.cancelledBy||'—')}</div>`}</td>
       <td style="white-space:nowrap;">
-        <button class="btn btn-icon btn-sm" title="Réimprimer" onclick='printReceipt(${JSON.stringify(s).replace(/'/g,"&#39;")})'>🖨️</button>
-        ${s.status==='valid' && can('cancelSale') ? `<button class="btn btn-icon btn-sm" title="Annuler" onclick="openCancelSaleModal('${s.id}')">↩️</button>` : ''}
+        <button class="btn btn-ghost btn-sm" title="Voir / imprimer / télécharger" onclick="showReceiptModal(byId(DB.sales,'${s.id}'),'ticket')">🧾 Ticket / Facture</button>
+        ${s.status==='valid' && can('cancelSale') ? `<button class="btn btn-danger btn-sm" title="Annuler cette vente" onclick="openCancelSaleModal('${s.id}')">↩️ Annuler</button>` : ''}
       </td>
     </tr>`).join('');
 }
@@ -1954,9 +2153,16 @@ function cancelSale(saleId){
   const sale = byId(DB.sales, saleId);
   sale.status='cancelled'; sale.cancelReason=reason; sale.cancelledBy=SESSION.user.username; sale.cancelledAt=nowISO();
   sale.items.forEach(it=>{
+    const sId = it.stockId || sale.stockId;
     if(!DB.stockLevels[it.productId]) DB.stockLevels[it.productId]={};
-    DB.stockLevels[it.productId][sale.stockId] = roundQty((DB.stockLevels[it.productId][sale.stockId]||0) + it.qty*it.unitQtyInBase);
-    DB.stockMovements.unshift({id:uid('mv'), type:'cancel_sale', productId:it.productId, productName:it.name, qty: it.qty*it.unitQtyInBase, fromStock:null, toStock:sale.stockId, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Annulation vente '+sale.number});
+    DB.stockLevels[it.productId][sId] = roundQty((DB.stockLevels[it.productId][sId]||0) + it.qty*it.unitQtyInBase);
+    DB.stockMovements.unshift({id:uid('mv'), type:'cancel_sale', productId:it.productId, productName:it.name, qty: it.qty*it.unitQtyInBase, fromStock:null, toStock:sId, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Annulation vente '+sale.number});
+    const prod = byId(DB.products, it.productId);
+    if(prod && prod.special==='bottle' && it.withBottle===false){
+      if(DB.emptyBottles && DB.emptyBottles[it.productId]){
+        DB.emptyBottles[it.productId][sId] = roundQty((DB.emptyBottles[it.productId][sId]||0) - it.qty*it.unitQtyInBase);
+      }
+    }
   });
   if(sale.isCredit){ const cr = DB.credits.find(x=>x.saleId===sale.id); if(cr){ cr.remaining = 0; cr.notes += ' (vente annulée)'; } }
   addNotification('cancel', `Vente ${sale.number} annulée par ${SESSION.user.username} — motif: ${reason}`);
@@ -1979,7 +2185,15 @@ function render_stockOps(c){
   `;
   switchStockOpsTab('entry');
 }
+let STOCKOPS_TAB = 'entry';
+function canCancelEntry(){ return isAdmin() || can('cancelSale'); }
+function entryActionCell(m){
+  if(m.cancelled) return `<span class="badge badge-red">Annulée</span><div class="small-note">Motif : ${escapeHtml(m.cancelReason||'—')}<br>par ${escapeHtml(m.cancelledBy||'—')}</div>`;
+  if((m.type==='entry' || m.type==='import') && m.qty>0 && canCancelEntry()) return `<button class="btn btn-danger btn-sm" onclick="openCancelEntryModal('${m.id}')">↩️ Annuler cette entrée</button>`;
+  return '';
+}
 function switchStockOpsTab(t){
+  STOCKOPS_TAB = t;
   document.querySelectorAll('.tab-h').forEach(el=>el.classList.toggle('active', el.dataset.t===t));
   const body = document.getElementById('stockOpsBody');
   if(t==='entry'){
@@ -1991,6 +2205,13 @@ function switchStockOpsTab(t){
         <div class="field full"><label>Note (fournisseur, référence bon de livraison...)</label><input id="entryNote"></div>
       </div>
       <button class="btn btn-primary" style="margin-top:10px;" onclick="doStockEntry()">+ Enregistrer l'entrée</button>
+    </div>
+    <div class="card" style="margin-top:18px;">
+      <div class="card-head"><h3>Dernières entrées de stock</h3></div>
+      <p class="small-note">Une entrée saisie par erreur peut être annulée ici (le stock est corrigé et une trace reste dans l'historique).</p>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Produit</th><th>Qté</th><th>Magasin</th><th>Par</th><th></th></tr></thead>
+      <tbody>${(()=>{ const last = DB.stockMovements.filter(m=>m.type==='entry'||m.type==='import').slice(0,10);
+        return last.length? last.map(m=>`<tr><td>${fmtDate(m.date)}</td><td>${escapeHtml(m.productName)}</td><td style="color:var(--green-700)">+${fmtNum(m.qty)}</td><td>${escapeHtml(stockName(m.toStock))}</td><td>${escapeHtml(m.userName)}</td><td>${entryActionCell(m)}</td></tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">Aucune entrée pour l'instant.</div></td></tr>`; })()}</tbody></table></div>
     </div>`;
   } else if(t==='transfer'){
     body.innerHTML = `<div class="card" style="max-width:560px;">
@@ -2007,18 +2228,47 @@ function switchStockOpsTab(t){
   } else {
     const mv = DB.stockMovements.slice(0,300);
     body.innerHTML = `<div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Date</th><th>Type</th><th>Produit</th><th>Qté</th><th>De</th><th>Vers</th><th>Utilisateur</th><th>Note</th></tr></thead>
+      <thead><tr><th>Date</th><th>Type</th><th>Produit</th><th>Qté</th><th>De</th><th>Vers</th><th>Utilisateur</th><th>Note</th><th>Action</th></tr></thead>
       <tbody>${mv.length? mv.map(m=>`<tr>
         <td>${fmtDate(m.date)}</td><td>${mvTypeLabel(m.type)}</td><td>${escapeHtml(m.productName)}</td>
         <td style="color:${m.qty<0?'var(--red)':'var(--green-700)'}">${m.qty>0?'+':''}${fmtNum(m.qty)}</td>
         <td>${escapeHtml(stockName(m.fromStock))}</td><td>${escapeHtml(stockName(m.toStock))}</td>
-        <td>${escapeHtml(m.userName)}</td><td>${escapeHtml(m.note||'')}</td>
-      </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state">Aucun mouvement.</div></td></tr>`}</tbody>
+        <td>${escapeHtml(m.userName)}</td><td>${escapeHtml(m.note||'')}</td><td>${entryActionCell(m)}</td>
+      </tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">Aucun mouvement.</div></td></tr>`}</tbody>
     </table></div></div>`;
   }
 }
-function mvTypeLabel(t){ return {entry:'📥 Entrée', transfer_out:'🔄 Sortie transfert', transfer_in:'🔄 Entrée transfert', sale:'🛒 Vente', cancel_sale:'↩️ Annulation vente', import:'📥 Import', cancel_entry:'❌ Annulation entrée'}[t] || t; }
+function mvTypeLabel(t){ return {entry:'📥 Entrée', transfer_out:'🔄 Sortie transfert', transfer_in:'🔄 Entrée transfert', sale:'🛒 Vente', cancel_sale:'↩️ Annulation vente', import:'📥 Import', cancel_entry:'❌ Annulation entrée', inventory_adjust:'📋 Ajustement inventaire'}[t] || t; }
 function stockName(id){ if(!id) return '—'; const s = byId(DB.stocks,id); return s?s.name:'—'; }
+
+function openCancelEntryModal(mvId){
+  const m = byId(DB.stockMovements, mvId);
+  openModal({
+    title: 'Annuler une entrée de stock',
+    bodyHtml: `<p style="font-size:14px;">Entrée de <b>${fmtNum(m.qty)}</b> × <b>${escapeHtml(m.productName)}</b> dans « ${escapeHtml(stockName(m.toStock))} » (${fmtDate(m.date)}).</p>
+      <div class="field"><label>Motif de l'annulation *</label><input id="cancelEntryReason" placeholder="ex: erreur de saisie, marchandise non livrée..."></div>
+      <p class="small-note">Le stock sera diminué de cette quantité. L'opération reste tracée dans l'historique et ne peut pas être annulée à son tour.</p>`,
+    footHtml: `<button class="btn btn-ghost" onclick="closeModal()">Fermer</button><button class="btn btn-danger" onclick="doCancelEntry('${mvId}')">Confirmer l'annulation</button>`
+  });
+}
+function doCancelEntry(mvId){
+  const m = byId(DB.stockMovements, mvId);
+  if(!m || m.cancelled){ toast('Cette entrée est déjà annulée.', 'err'); return; }
+  const reason = document.getElementById('cancelEntryReason').value.trim();
+  if(!reason){ toast('Le motif est obligatoire.', 'err'); return; }
+  const stockId = m.toStock;
+  const avail = (DB.stockLevels[m.productId]||{})[stockId] || 0;
+  if(m.qty > avail + 0.0001){
+    toast(`Impossible : il ne reste que ${fmtNum(avail)} de ce produit dans ce magasin (le reste a déjà été vendu ou transféré).`, 'err'); return;
+  }
+  DB.stockLevels[m.productId][stockId] = roundQty(avail - m.qty);
+  m.cancelled = true; m.cancelReason = reason; m.cancelledBy = SESSION.user.username; m.cancelledAt = nowISO();
+  DB.stockMovements.unshift({id:uid('mv'), type:'cancel_entry', productId:m.productId, productName:m.productName, qty:-m.qty, fromStock:stockId, toStock:null, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Annulation entrée du '+fmtDate(m.date)+' — '+reason});
+  addNotification('stock', `Entrée annulée : ${m.productName} −${fmtNum(m.qty)} (${reason}).`);
+  logHistory('Entrée de stock annulée', `${m.productName} −${m.qty} — motif: ${reason}`);
+  saveDB(); closeModal(); switchStockOpsTab(STOCKOPS_TAB);
+  toast('Entrée annulée, stock corrigé.');
+}
 
 function doStockEntry(){
   const productId = document.getElementById('entryProduct').value;
@@ -2072,44 +2322,78 @@ function render_inventory(c){
   `;
   document.getElementById('invBody').innerHTML = `<div class="empty-state"><div class="em-ico">📋</div>Choisissez un stock puis générez la fiche d'inventaire du jour.</div>`;
 }
+function inventoryProducts(stockId){
+  return DB.products.filter(p=>p.active!==false && (p.homeStockId===stockId || ((DB.stockLevels[p.id]||{})[stockId]||0)>0));
+}
 function generateInventorySheet(){
   const stockId = document.getElementById('invStockSel').value;
-  const products = DB.products.filter(p=>p.active!==false && (p.homeStockId===stockId || ((DB.stockLevels[p.id]||{})[stockId]||0)>0));
+  const products = inventoryProducts(stockId);
+  const toOrder = products.filter(p=> stockLevelState((DB.stockLevels[p.id]||{})[stockId]||0, p.minThresholdBase)!=='green').length;
   const body = document.getElementById('invBody');
   body.innerHTML = `<div class="card">
     <div class="card-head"><h3>Fiche d'inventaire — ${escapeHtml(stockName(stockId))} — ${fmtDateOnly(nowISO())}</h3><div class="spacer"></div>
-      <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨️ Imprimer la fiche</button></div>
-    <div class="search-box" style="max-width:320px;margin-bottom:14px;">🔎 <input id="invSearch" placeholder="Rechercher un produit..." oninput="filterInventoryRows()"></div>
+      <button class="btn btn-ghost btn-sm" onclick="exportOrderListPDF('${stockId}')">📋 Liste à commander (PDF)</button></div>
+    <div class="toolbar">
+      <div class="search-box" style="max-width:320px;">🔎 <input id="invSearch" placeholder="Rechercher un produit..." oninput="filterInventoryRows()"></div>
+      <select class="filter" id="invStateFilter" onchange="filterInventoryRows()">
+        <option value="">Tous les produits</option>
+        <option value="todo">À commander seulement (${toOrder})</option>
+      </select>
+    </div>
+    <div class="hint" style="margin-bottom:10px;display:flex;gap:14px;flex-wrap:wrap;">
+      <span><span class="stock-dot dot-green"></span>Stock suffisant</span>
+      <span><span class="stock-dot dot-orange"></span>Stock faible : il reste peu, à commander</span>
+      <span><span class="stock-dot dot-red"></span>Rupture : 0 en stock, à commander d'urgence</span>
+    </div>
     <p class="hint">Astuce : ne remplissez que la colonne "Quantité comptée" pour les produits que vous avez vérifiés. Une ligne devient <span style="color:var(--orange);font-weight:700;">orange</span> si un écart est détecté.</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>Produit</th><th>Emplacement</th><th>Stock théorique</th><th>Unité</th><th>Quantité comptée</th><th>Écart</th></tr></thead>
+      <thead><tr><th>Produit</th><th>Emplacement</th><th>Stock théorique</th><th>Seuil</th><th>Unité</th><th>État</th><th>Quantité comptée</th><th>Écart</th></tr></thead>
       <tbody id="invTbody">${products.map(p=>{
         const theo = (DB.stockLevels[p.id]||{})[stockId] || 0;
-        return `<tr data-pid="${p.id}" data-name="${escapeHtml(p.name.toLowerCase())}"><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.location||'—')} ${escapeHtml(p.locationNumber||'')}</td>
-        <td class="theo-cell">${fmtNum(theo)}</td><td>${escapeHtml(p.units[0].name)}</td>
+        const st = stockLevelState(theo, p.minThresholdBase);
+        return `<tr data-pid="${p.id}" data-theo="${theo}" data-state="${st}" data-name="${escapeHtml(p.name.toLowerCase())}"><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.location||'—')} ${escapeHtml(p.locationNumber||'')}</td>
+        <td class="theo-cell" style="${stockCellStyle(theo, p.minThresholdBase)}">${fmtNum(theo)}</td><td>${fmtNum(p.minThresholdBase||0)}</td><td>${escapeHtml(p.units[0].name)}</td>
+        <td>${stockStateBadge(theo, p.minThresholdBase)}</td>
         <td><input type="number" class="counted-input filter" style="width:100px;" step="any" oninput="updateInvDiff(this)"></td>
         <td class="diff-cell">—</td></tr>`;
       }).join('')}</tbody>
     </table></div>
     <div class="field" style="margin-top:14px;"><label>Observations</label><input id="invNotes" placeholder="Remarques générales sur l'inventaire"></div>
     <div class="toolbar" style="margin-top:8px;"><button class="btn btn-primary" onclick="saveInventory('${stockId}')">💾 Enregistrer l'inventaire</button>
-    <button class="btn btn-ghost" onclick="exportInventorySheetPDF('${stockId}')">🖨️ Exporter en PDF</button></div>
+    <button class="btn btn-ghost" onclick="exportInventorySheetPDF('${stockId}')">🖨️ Exporter la fiche en PDF</button></div>
   </div>`;
 }
 function filterInventoryRows(){
   const q = (document.getElementById('invSearch').value||'').toLowerCase();
-  document.querySelectorAll('#invTbody tr').forEach(r=>{ r.style.display = r.dataset.name.includes(q) ? '' : 'none'; });
+  const only = document.getElementById('invStateFilter').value;
+  document.querySelectorAll('#invTbody tr').forEach(r=>{
+    const okName = r.dataset.name.includes(q);
+    const okState = only!=='todo' || r.dataset.state!=='green';
+    r.style.display = (okName && okState) ? '' : 'none';
+  });
 }
 function exportInventorySheetPDF(stockId){
   const rows = Array.from(document.querySelectorAll('#invTbody tr')).map(r=>{
     const cells = r.querySelectorAll('td');
-    return [cells[0].textContent, cells[1].textContent, cells[2].textContent, cells[3].textContent, r.querySelector('.counted-input').value||'—', cells[5].textContent];
+    return [cells[0].textContent, cells[1].textContent, cells[2].textContent, cells[3].textContent, cells[4].textContent, cells[5].textContent, r.querySelector('.counted-input').value||'—', cells[7].textContent];
   });
-  printPDFDoc('Fiche d\u2019inventaire — '+stockName(stockId), fmtDateOnly(nowISO()), tableHtml(['Produit','Emplacement','Stock théorique','Unité','Compté','Écart'], rows));
+  printPDFDoc('Fiche d\u2019inventaire — '+stockName(stockId), fmtDateOnly(nowISO()), tableHtml(['Produit','Emplacement','Stock théorique','Seuil','Unité','État','Compté','Écart'], rows));
+}
+function exportOrderListPDF(stockId){
+  const list = inventoryProducts(stockId).map(p=>{
+    const q = (DB.stockLevels[p.id]||{})[stockId]||0;
+    return {p, q, st: stockLevelState(q, p.minThresholdBase)};
+  }).filter(x=>x.st!=='green').sort((a,b)=>a.q-b.q);
+  const rows = list.map(x=>{
+    const sup = byId(DB.suppliers, x.p.supplierId);
+    return [x.p.name, fmtNum(x.q)+' '+x.p.units[0].name, fmtNum(x.p.minThresholdBase||0), fmtNum(Math.max(0,(x.p.minThresholdBase||0)-x.q)), x.st==='red'?'RUPTURE':'Stock faible', sup?sup.name:'—'];
+  });
+  printPDFDoc('Liste des articles à commander — '+stockName(stockId), fmtDateOnly(nowISO()),
+    rows.length ? tableHtml(['Article','Stock actuel','Seuil','Manque pour atteindre le seuil','État','Fournisseur'], rows) : '<p>Aucun article à commander : tous les stocks sont suffisants.</p>');
 }
 function updateInvDiff(input){
   const row = input.closest('tr');
-  const theo = parseFloat(row.querySelector('.theo-cell').textContent.replace(/\\s/g,''))||0;
+  const theo = parseFloat(row.dataset.theo)||0;
   const counted = parseFloat(input.value);
   const diffCell = row.querySelector('.diff-cell');
   if(isNaN(counted)){ diffCell.textContent='—'; diffCell.style.color=''; row.style.background=''; return; }
@@ -2344,77 +2628,251 @@ function showCreditHistory(id){
 }
 
 /* =========================================================
-   STATISTIQUES & BILANS
+   STATISTIQUES, COURBES & BILANS (jour / semaine / mois / année)
 ========================================================= */
-let STATS_PERIOD = 'week';
+function localKey(d, mode){
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), da=String(d.getDate()).padStart(2,'0'), h=String(d.getHours()).padStart(2,'0');
+  if(mode==='hour') return y+'-'+m+'-'+da+' '+h;
+  if(mode==='day') return y+'-'+m+'-'+da;
+  return y+'-'+m;
+}
+function todayLocal(){ return localKey(new Date(),'day'); }
+function parseLocalDate(str){ const p=String(str).split('-').map(Number); return new Date(p[0], (p[1]||1)-1, p[2]||1); }
+
+/* Bornes [début, fin] d'une période autour d'une date de référence */
+function periodBounds(period, refStr){
+  const r = parseLocalDate(refStr), y=r.getFullYear(), m=r.getMonth(), d=r.getDate();
+  let start, end;
+  if(period==='day'){ start=new Date(y,m,d,0,0,0,0); end=new Date(y,m,d,23,59,59,999); }
+  else if(period==='week'){ start=new Date(y,m,d-6,0,0,0,0); end=new Date(y,m,d,23,59,59,999); }
+  else if(period==='month'){ start=new Date(y,m,1,0,0,0,0); end=new Date(y,m+1,0,23,59,59,999); }
+  else { start=new Date(y,0,1,0,0,0,0); end=new Date(y,11,31,23,59,59,999); }
+  return [start,end];
+}
+function periodTitle(period, refStr){
+  const b = periodBounds(period, refStr), a=b[0], z=b[1];
+  if(period==='day') return 'Bilan journalier — ' + a.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  if(period==='week') return 'Bilan hebdomadaire — du ' + a.toLocaleDateString('fr-FR') + ' au ' + z.toLocaleDateString('fr-FR');
+  if(period==='month') return 'Bilan mensuel — ' + a.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+  return 'Bilan annuel — ' + a.getFullYear();
+}
+
+/* Série de ventes pour la courbe */
+function salesSeries(period, refStr, stockFilter){
+  const r = parseLocalDate(refStr), y=r.getFullYear(), m=r.getMonth(), dd=r.getDate();
+  const sales = DB.sales.filter(s=>s.status==='valid' && (!stockFilter || s.stockId===stockFilter));
+  let mode, pts=[];
+  if(period==='day'){ mode='hour'; for(let h=0;h<24;h++) pts.push({key:localKey(new Date(y,m,dd,h),'hour'), label:h+'h'}); }
+  else if(period==='week'){ mode='day'; for(let i=6;i>=0;i--){ const d=new Date(y,m,dd-i); pts.push({key:localKey(d,'day'), label:d.toLocaleDateString('fr-FR',{weekday:'short'})+' '+d.getDate()}); } }
+  else if(period==='month'){ mode='day'; const n=new Date(y,m+1,0).getDate(); for(let i=1;i<=n;i++) pts.push({key:localKey(new Date(y,m,i),'day'), label:String(i)}); }
+  else { mode='month'; for(let mo=0;mo<12;mo++){ const d=new Date(y,mo,1); pts.push({key:localKey(d,'month'), label:d.toLocaleDateString('fr-FR',{month:'short'})}); } }
+  const map = {};
+  sales.forEach(s=>{ const k=localKey(new Date(s.date),mode); map[k]=(map[k]||0)+s.total; });
+  pts.forEach(p=>{ p.value = map[p.key]||0; });
+  return { points:pts, mode, total: pts.reduce((a,p)=>a+p.value,0) };
+}
+
+function niceCeil(v){ if(v<=0) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))), mm=v/p; return (mm<=1?1:mm<=2?2:mm<=5?5:10)*p; }
+function fmtShort(v){ if(v>=1e6) return (v/1e6).toLocaleString('fr-FR',{maximumFractionDigits:1})+' M'; if(v>=1e3) return Math.round(v/1e3).toLocaleString('fr-FR')+' k'; return String(Math.round(v)); }
+
+/* Courbe (SVG lissé) */
+function lineChartSvg(points, gid){
+  const total = points.reduce((a,p)=>a+p.value,0);
+  if(!total) return '<div class="empty-state" style="padding:30px 0;">Aucune vente sur cette période.</div>';
+  const W=720,H=270,padL=56,padR=18,padT=22,padB=36, base=H-padB;
+  const max = niceCeil(Math.max.apply(null, points.map(p=>p.value)));
+  const n = points.length;
+  const X = i => padL + (n===1 ? (W-padL-padR)/2 : i*(W-padL-padR)/(n-1));
+  const Y = v => padT + (1 - v/max)*(H-padT-padB);
+  const clampY = y => Math.min(base, Math.max(padT, y));
+  let grid='';
+  for(let g=0; g<=4; g++){ const v=max*g/4, y=Y(v);
+    grid += '<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="#dfeee5" stroke-width="1"/><text x="'+(padL-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="10" fill="#4a5a51">'+fmtShort(v)+'</text>'; }
+  const P = points.map((p,i)=>({x:X(i), y:Y(p.value)}));
+  let d = 'M'+P[0].x+','+P[0].y;
+  for(let i=0;i<P.length-1;i++){
+    const p0=P[i-1]||P[i], p1=P[i], p2=P[i+1], p3=P[i+2]||p2;
+    d += ' C'+(p1.x+(p2.x-p0.x)/6)+','+clampY(p1.y+(p2.y-p0.y)/6)+' '+(p2.x-(p3.x-p1.x)/6)+','+clampY(p2.y-(p3.y-p1.y)/6)+' '+p2.x+','+p2.y;
+  }
+  const area = d+' L'+P[n-1].x+','+base+' L'+P[0].x+','+base+' Z';
+  const step = Math.ceil(n/12);
+  let labels='', dots='';
+  points.forEach((p,i)=>{
+    if(i%step===0) labels += '<text x="'+P[i].x+'" y="'+(H-12)+'" text-anchor="middle" font-size="10" fill="#4a5a51">'+escapeHtml(p.label)+'</text>';
+    if(p.value>0) dots += '<circle cx="'+P[i].x+'" cy="'+P[i].y+'" r="3.5" fill="#15693f" stroke="#fff" stroke-width="1.5"><title>'+escapeHtml(p.label+' : '+fmtAr(p.value))+'</title></circle>';
+  });
+  let peak = 0; points.forEach((p,i)=>{ if(p.value>points[peak].value) peak=i; });
+  const peakTxt = '<text x="'+P[peak].x+'" y="'+(P[peak].y-9)+'" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0f5233">'+fmtShort(points[peak].value)+'</text>';
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;max-height:300px;" role="img">'
+    + '<defs><linearGradient id="lg_'+gid+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4fc47f" stop-opacity=".45"/><stop offset="100%" stop-color="#4fc47f" stop-opacity="0.02"/></linearGradient></defs>'
+    + grid + '<path d="'+area+'" fill="url(#lg_'+gid+')"/>'
+    + '<path d="'+d+'" fill="none" stroke="#1c8a52" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>'
+    + dots + peakTxt + labels + '</svg>';
+}
+
+/* Produits les plus vendus (quantités en unité de base) */
+function topProducts(salesList, limit){
+  const qty={}, ca={};
+  salesList.forEach(sale=>sale.items.forEach(it=>{
+    qty[it.productId]=(qty[it.productId]||0)+it.qty*(it.unitQtyInBase||1);
+    ca[it.productId]=(ca[it.productId]||0)+it.qty*it.unitPrice;
+  }));
+  return Object.keys(qty).sort((a,b)=>qty[b]-qty[a]).slice(0,limit).map(pid=>{
+    const p = byId(DB.products,pid);
+    return { pid, name: p?p.name:'(produit supprimé)', unit: p&&p.units&&p.units[0]?p.units[0].name:'', qty:qty[pid], ca:ca[pid] };
+  });
+}
+
+/* Calcul complet d'un bilan sur [startISO, endISO] */
+function computeBilan(startISO, endISO, stockFilter){
+  const inRange = d => d>=startISO && d<=endISO;
+  const matchStock = s => !stockFilter || s.stockId===stockFilter;
+  const sales = DB.sales.filter(s=>s.status==='valid' && inRange(s.date) && matchStock(s));
+  const cancelledSales = DB.sales.filter(s=>s.status==='cancelled' && inRange(s.date) && matchStock(s));
+  const ca = sumSales(sales);
+  const profit = sales.reduce((a,x)=>a+estimateProfit(x),0);
+  const expenses = DB.expenses.filter(x=>inRange(x.date));
+  const expTotal = expenses.reduce((a,x)=>a+x.amount,0);
+  const expByCat = {};
+  expenses.forEach(x=>{ expByCat[x.category]=(expByCat[x.category]||0)+x.amount; });
+  const creditGranted = sales.filter(s=>s.isCredit).reduce((a,s)=>a+Math.max(0,s.total-s.paid),0);
+  let settlements=0, settlementsCount=0;
+  DB.credits.forEach(cr=>{
+    const sale = byId(DB.sales, cr.saleId);
+    const initial = (sale && sale.paid>0) ? 1 : 0; // le 1er paiement est celui fait lors de la vente
+    (cr.payments||[]).slice(initial).forEach(pm=>{ if(inRange(pm.date)){ settlements+=pm.amount; settlementsCount++; } });
+  });
+  const mv = DB.stockMovements.filter(m=>inRange(m.date));
+  const closures = DB.cashSessions.filter(c=>c.status==='closed' && c.closedAt && inRange(c.closedAt));
+  return {
+    sales, cancelledSales, ca, profit, expenses, expTotal, expByCat, netResult: profit-expTotal,
+    creditGranted, settlements, settlementsCount,
+    entries: mv.filter(m=>(m.type==='entry'||m.type==='import') && !m.cancelled).length,
+    entriesCancelled: mv.filter(m=>m.type==='cancel_entry').length,
+    transfers: mv.filter(m=>m.type==='transfer_out').length,
+    closures, cashGap: closures.reduce((a,c)=>a+(c.difference||0),0),
+    top: topProducts(sales, 10)
+  };
+}
+function bilanRows(b, showProfit){
+  const rows = [];
+  rows.push(['Chiffre d\u2019affaires', fmtAr(b.ca)+' ('+b.sales.length+' vente(s))']);
+  rows.push(['Panier moyen', b.sales.length? fmtAr(b.ca/b.sales.length) : '—']);
+  rows.push(['Ventes annulées', b.cancelledSales.length+' ('+fmtAr(b.cancelledSales.reduce((a,s)=>a+s.total,0))+')']);
+  if(showProfit) rows.push(['Bénéfice estimé (marge brute)', fmtAr(b.profit)]);
+  rows.push(['Dépenses', fmtAr(b.expTotal)+' ('+b.expenses.length+')']);
+  Object.keys(b.expByCat).forEach(cat=>{ rows.push(['     • '+cat, fmtAr(b.expByCat[cat])]); });
+  if(showProfit) rows.push(['Résultat net estimé (bénéfice − dépenses)', fmtAr(b.netResult)]);
+  rows.push(['Ventes à crédit accordées (reste dû)', fmtAr(b.creditGranted)]);
+  rows.push(['Règlements clients reçus', fmtAr(b.settlements)+' ('+b.settlementsCount+' paiement(s))']);
+  rows.push(['Crédits clients en cours (total actuel)', fmtAr(DB.credits.reduce((a,c)=>a+c.remaining,0))]);
+  rows.push(['Entrées de stock', b.entries+' (annulées : '+b.entriesCancelled+')']);
+  rows.push(['Transferts entre stocks', String(b.transfers)]);
+  rows.push(['Clôtures de caisse', b.closures.length+' — écart cumulé : '+fmtAr(b.cashGap)]);
+  return rows;
+}
+
+let STATS_PERIOD = 'month';
+let STATS_REF = null;
+let STATS_TOP_YEAR = null;
+function statsYears(){
+  const set = {}; set[new Date().getFullYear()] = 1;
+  DB.sales.forEach(s=>{ set[new Date(s.date).getFullYear()] = 1; });
+  return Object.keys(set).map(Number).sort((a,b)=>b-a);
+}
+function setStatsPeriod(k){ STATS_PERIOD = k; STATS_REF = todayLocal(); render_stats(document.getElementById('pageContent')); }
+function setStatsRef(v){ if(!v) return; STATS_REF = v; renderStatsBody(); }
+function statsPickerHtml(){
+  if(STATS_PERIOD==='month') return '<input type="month" class="filter" value="'+STATS_REF.slice(0,7)+'" onchange="setStatsRef(this.value+\'-01\')">';
+  if(STATS_PERIOD==='year') return '<select class="filter" onchange="setStatsRef(this.value+\'-01-01\')">'+statsYears().map(y=>'<option value="'+y+'"'+(String(y)===STATS_REF.slice(0,4)?' selected':'')+'>'+y+'</option>').join('')+'</select>';
+  return '<span class="hint" style="margin:0;">'+(STATS_PERIOD==='week'?'7 jours jusqu\u2019au :':'Jour :')+'</span><input type="date" class="filter" value="'+STATS_REF+'" onchange="setStatsRef(this.value)">';
+}
 function render_stats(c){
+  if(!STATS_REF) STATS_REF = todayLocal();
+  if(!STATS_TOP_YEAR) STATS_TOP_YEAR = new Date().getFullYear();
   c.innerHTML = `
-    <div class="pill-row" style="margin-bottom:18px;">
-      ${[['day','Jour'],['week','Semaine'],['month','Mois'],['year','Année']].map(([k,l])=>`<button class="${STATS_PERIOD===k?'active':''}" onclick="STATS_PERIOD='${k}';render_stats(document.getElementById('pageContent'))">${l}</button>`).join('')}
+    <div class="toolbar">
+      <div class="pill-row">
+        ${[['day','Jour'],['week','Semaine'],['month','Mois'],['year','Année']].map(([k,l])=>`<button class="${STATS_PERIOD===k?'active':''}" onclick="setStatsPeriod('${k}')">${l}</button>`).join('')}
+      </div>
+      ${statsPickerHtml()}
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" onclick="exportStatsBilan()">📤 Excel</button>
+      <button class="btn btn-primary" onclick="exportStatsBilanPDF()">🖨️ Bilan en PDF</button>
     </div>
-    <div class="toolbar"><div class="spacer"></div><button class="btn btn-ghost" onclick="exportStatsBilan()">📤 Exporter le bilan (Excel)</button><button class="btn btn-ghost" onclick="exportStatsBilanPDF()">🖨️ Télécharger en PDF</button></div>
     <div id="statsBody"></div>
   `;
   renderStatsBody();
 }
-function periodRange(){
-  const end = new Date();
-  const start = new Date();
-  if(STATS_PERIOD==='day') start.setHours(0,0,0,0);
-  else if(STATS_PERIOD==='week') start.setDate(start.getDate()-6);
-  else if(STATS_PERIOD==='month') start.setDate(start.getDate()-29);
-  else start.setMonth(0,1);
-  return [start.toISOString(), end.toISOString()];
+function periodRange(){ const b = periodBounds(STATS_PERIOD, STATS_REF); return [b[0].toISOString(), b[1].toISOString()]; }
+
+function topYearHtml(year){
+  const s = new Date(year,0,1).toISOString(), e = new Date(year,11,31,23,59,59,999).toISOString();
+  const top = topProducts(DB.sales.filter(x=>x.status==='valid' && x.date>=s && x.date<=e), 20);
+  if(!top.length) return '<div class="empty-state">Aucune vente enregistrée en '+year+'.</div>';
+  const max = top[0].qty || 1;
+  return '<div class="table-wrap"><table><thead><tr><th>#</th><th>Produit</th><th>Quantité vendue</th><th style="width:26%;"></th><th style="text-align:right;">Chiffre d\u2019affaires</th></tr></thead><tbody>'
+    + top.map((t,i)=>'<tr><td>'+(i+1)+'</td><td>'+escapeHtml(t.name)+'</td><td><b>'+fmtNum(t.qty)+'</b> '+escapeHtml(t.unit)+'</td><td><div style="height:8px;border-radius:6px;background:#e6f7ec;"><div style="height:8px;border-radius:6px;background:#25a862;width:'+Math.round(t.qty/max*100)+'%;"></div></div></td><td style="text-align:right;">'+fmtAr(t.ca)+'</td></tr>').join('')
+    + '</tbody></table></div>';
 }
+function setTopYear(y){ STATS_TOP_YEAR = Number(y); document.getElementById('topYearBody').innerHTML = topYearHtml(STATS_TOP_YEAR); }
+function exportTopYearPDF(){
+  const year = STATS_TOP_YEAR;
+  const s = new Date(year,0,1).toISOString(), e = new Date(year,11,31,23,59,59,999).toISOString();
+  const top = topProducts(DB.sales.filter(x=>x.status==='valid' && x.date>=s && x.date<=e), 20);
+  printPDFDoc('Produits les plus vendus — '+year, '', top.length ? tableHtml(['#','Produit','Quantité vendue','Chiffre d\u2019affaires'], top.map((t,i)=>[String(i+1), t.name, fmtNum(t.qty)+' '+t.unit, fmtAr(t.ca)])) : '<p>Aucune vente cette année-là.</p>');
+}
+
 function renderStatsBody(){
-  const [s,e] = periodRange();
-  const sales = salesBetween(s,e);
-  const expenses = DB.expenses.filter(x=>x.date>=s && x.date<=e);
-  const total = sumSales(sales);
-  const expTotal = expenses.reduce((a,x)=>a+x.amount,0);
+  const [sISO,eISO] = periodRange();
+  const b = computeBilan(sISO,eISO);
   const showProfit = isAdmin() || can('seeProfit');
-  const profit = sales.reduce((a,x)=>a+estimateProfit(x),0);
-
-  // group by day for chart
-  const byDay = {};
-  sales.forEach(sale=>{ const d = sale.date.slice(0,10); byDay[d]=(byDay[d]||0)+sale.total; });
-  const days = Object.keys(byDay).sort();
-  const maxV = Math.max(1, ...Object.values(byDay));
-  const chart = days.length ? `<svg viewBox="0 0 ${Math.max(400,days.length*60)} 200" style="width:100%;height:200px;">
-    ${days.map((d,i)=>{ const bw=40,gap=20,x=15+i*(bw+gap); const h=Math.round((byDay[d]/maxV)*140); const y=170-h;
-      return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="5" fill="#25a862"></rect><text x="${x+bw/2}" y="188" text-anchor="middle" font-size="9" fill="#4a5a51">${d.slice(5)}</text>`; }).join('')}
-  </svg>` : '<div class="empty-state">Aucune vente sur cette période.</div>';
-
-  const qtyByProd = {};
-  sales.forEach(sale=>sale.items.forEach(it=>{ qtyByProd[it.productId]=(qtyByProd[it.productId]||0)+it.qty*(it.unitQtyInBase||1); }));
-  const top = Object.entries(qtyByProd).sort((a,b)=>b[1]-a[1]).slice(0,10);
-
+  const series = salesSeries(STATS_PERIOD, STATS_REF, '');
+  const rows = bilanRows(b, showProfit);
   const creditsTotal = DB.credits.reduce((a,x)=>a+x.remaining,0);
-  const mvSum = DB.stockMovements.filter(m=>m.date>=s&&m.date<=e).length;
-
   document.getElementById('statsBody').innerHTML = `
-    <div class="grid grid-4">
-      <div class="kpi"><div class="lbl">Chiffre d'affaires</div><div class="val">${fmtAr(total)}</div></div>
-      <div class="kpi"><div class="lbl">Bénéfice estimé</div><div class="val">${showProfit? fmtAr(profit) : '••••••'}</div></div>
-      <div class="kpi"><div class="lbl">Dépenses</div><div class="val">${fmtAr(expTotal)}</div></div>
-      <div class="kpi"><div class="lbl">Crédits en cours</div><div class="val">${fmtAr(creditsTotal)}</div></div>
+    <h3 style="margin:6px 0 14px;font-size:17px;color:var(--green-900);text-transform:capitalize;">${escapeHtml(periodTitle(STATS_PERIOD, STATS_REF))}</h3>
+    <div class="grid grid-3">
+      <div class="kpi"><div class="lbl">Chiffre d'affaires</div><div class="val">${fmtAr(b.ca)}</div></div>
+      <div class="kpi"><div class="lbl">Nombre de ventes</div><div class="val">${b.sales.length}</div></div>
+      <div class="kpi"><div class="lbl">Bénéfice estimé</div><div class="val">${showProfit? fmtAr(b.profit) : '••••••'}</div></div>
+      <div class="kpi"><div class="lbl">Dépenses</div><div class="val">${fmtAr(b.expTotal)}</div></div>
+      <div class="kpi"><div class="lbl">Résultat net estimé</div><div class="val" style="color:${b.netResult<0?'var(--red)':'var(--green-900)'};">${showProfit? fmtAr(b.netResult) : '••••••'}</div></div>
+      <div class="kpi"><div class="lbl">Crédits clients en cours</div><div class="val">${fmtAr(creditsTotal)}</div></div>
     </div>
-    <div class="card" style="margin-top:18px;"><div class="card-head"><h3>Évolution des ventes</h3></div>${chart}</div>
+    <div class="card" style="margin-top:18px;"><div class="card-head"><h3>📈 Courbe des ventes</h3><div class="spacer"></div><span class="badge badge-green">Total : ${fmtAr(series.total)}</span></div>${lineChartSvg(series.points,'stats')}</div>
     <div class="two-col" style="margin-top:18px;">
-      <div class="card"><div class="card-head"><h3>Produits les plus vendus</h3></div>
-        ${top.length? `<div class="table-wrap"><table><thead><tr><th>Produit</th><th>Qté vendue</th></tr></thead><tbody>${top.map(([pid,q])=>`<tr><td>${escapeHtml((byId(DB.products,pid)||{}).name||'—')}</td><td>${fmtNum(q)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Aucune donnée.</div>'}
+      <div class="card"><div class="card-head"><h3>Produits les plus vendus (période)</h3></div>
+        ${b.top.length? `<div class="table-wrap"><table><thead><tr><th>Produit</th><th>Qté vendue</th><th style="text-align:right;">CA</th></tr></thead><tbody>${b.top.map(t=>`<tr><td>${escapeHtml(t.name)}</td><td>${fmtNum(t.qty)} ${escapeHtml(t.unit)}</td><td style="text-align:right;">${fmtAr(t.ca)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">Aucune donnée.</div>'}
       </div>
-      <div class="card"><div class="card-head"><h3>Résumé du bilan</h3></div>
-        <table>
-          <tr><td>Nombre de ventes</td><td style="text-align:right;font-weight:700;">${sales.length}</td></tr>
-          <tr><td>Mouvements de stock</td><td style="text-align:right;font-weight:700;">${mvSum}</td></tr>
-          <tr><td>Dépenses enregistrées</td><td style="text-align:right;font-weight:700;">${expenses.length}</td></tr>
-          <tr><td>Règlements clients reçus</td><td style="text-align:right;font-weight:700;">${DB.credits.filter(cr=>cr.payments.some(p=>p.date>=s&&p.date<=e)).length}</td></tr>
-        </table>
-        <button class="btn btn-ghost" style="margin-top:14px;" onclick="window.print()">🖨️ Imprimer ce bilan</button>
+      <div class="card"><div class="card-head"><h3>Détail du bilan</h3></div>
+        <table><tbody>${rows.map(r=>`<tr><td>${escapeHtml(r[0])}</td><td style="text-align:right;font-weight:700;">${escapeHtml(r[1])}</td></tr>`).join('')}</tbody></table>
       </div>
+    </div>
+    <div class="card" style="margin-top:18px;">
+      <div class="card-head"><h3>🏆 Produits les plus vendus par année</h3><div class="spacer"></div>
+        <select class="filter" onchange="setTopYear(this.value)">${statsYears().map(y=>`<option value="${y}" ${y===STATS_TOP_YEAR?'selected':''}>${y}</option>`).join('')}</select>
+        <button class="btn btn-ghost btn-sm" onclick="exportTopYearPDF()">🖨️ PDF</button>
+      </div>
+      <div id="topYearBody">${topYearHtml(STATS_TOP_YEAR)}</div>
     </div>
   `;
+}
+function exportStatsBilanPDF(){
+  const [s,e] = periodRange();
+  const b = computeBilan(s,e);
+  const showProfit = isAdmin() || can('seeProfit');
+  const series = salesSeries(STATS_PERIOD, STATS_REF, '');
+  let html = '<h2>Résumé</h2>' + tableHtml(['Indicateur','Valeur'], bilanRows(b, showProfit));
+  html += '<h2>Courbe des ventes</h2>' + lineChartSvg(series.points, 'pdf');
+  html += '<h2>Produits les plus vendus (période)</h2>' + (b.top.length ? tableHtml(['#','Produit','Quantité vendue','Chiffre d\u2019affaires'], b.top.map((t,i)=>[String(i+1), t.name, fmtNum(t.qty)+' '+t.unit, fmtAr(t.ca)])) : '<p>Aucune vente.</p>');
+  if(STATS_PERIOD==='year'){
+    const year = parseLocalDate(STATS_REF).getFullYear();
+    const top = topProducts(b.sales, 20);
+    html += '<h2>Quantités vendues par produit en '+year+'</h2>' + (top.length ? tableHtml(['#','Produit','Quantité vendue','Chiffre d\u2019affaires'], top.map((t,i)=>[String(i+1), t.name, fmtNum(t.qty)+' '+t.unit, fmtAr(t.ca)])) : '<p>Aucune vente.</p>');
+  }
+  html += '<h2>Détail des ventes</h2>' + tableHtml(['N°','Date','Client','Caissier','Total'], b.sales.map(x=>[x.number, fmtDate(x.date), x.clientName, x.cashierName, fmtAr(x.total)]));
+  printPDFDoc(periodTitle(STATS_PERIOD, STATS_REF), '', html);
 }
 
 /* =========================================================
@@ -2473,10 +2931,12 @@ function render_settings(c){
       <div class="tab-h ${SETTINGS_TAB==='categories'?'active':''}" onclick="setSettingsTab('categories')">Catégories</div>
       <div class="tab-h ${SETTINGS_TAB==='general'?'active':''}" onclick="setSettingsTab('general')">Général</div>
       <div class="tab-h ${SETTINGS_TAB==='backup'?'active':''}" onclick="setSettingsTab('backup')">Sauvegarde</div>
+      <div class="tab-h ${SETTINGS_TAB==='sync'?'active':''}" onclick="setSettingsTab('sync')">🌐 Réseau</div>
     </div>
     <div id="settingsBody"></div>
   `;
   renderSettingsBody();
+  updateSyncBadge();
 }
 function setSettingsTab(t){ SETTINGS_TAB=t; render_settings(document.getElementById('pageContent')); }
 
@@ -2515,18 +2975,60 @@ function renderSettingsBody(){
       <button class="btn btn-primary" onclick="saveGeneralSettings()">Enregistrer</button>
     </div>`;
   } else if(SETTINGS_TAB==='backup'){
-    body.innerHTML = `<div class="card" style="max-width:560px;">
-      <div class="card-head"><h3>💾 Sauvegarde</h3></div>
-      <p class="small-note">Téléchargez régulièrement une sauvegarde de toutes vos données (produits, ventes, stocks, clients...) et conservez-la en lieu sûr (clé USB, e-mail, etc.).</p>
-      <button class="btn btn-primary" onclick="downloadBackup()">⬇️ Télécharger la sauvegarde</button>
+    const snaps = listSnapshots();
+    body.innerHTML = `<div class="card" style="max-width:560px;border:2px solid var(--green-400);">
+      <div class="card-head"><h3>📄 Rapport lisible du jour (PDF)</h3></div>
+      <p class="small-note">C'est le document fait pour être <b>lu et compris facilement</b> : ventes du jour, stock à surveiller, crédits clients, caisse. À imprimer ou garder en PDF.</p>
+      <button class="btn btn-primary btn-block" onclick="generateDailyReportPDF()">🖨️ Générer le rapport du jour (PDF)</button>
     </div>
+
     <div class="card" style="max-width:560px;margin-top:18px;">
-      <div class="card-head"><h3>♻️ Restauration</h3></div>
+      <div class="card-head"><h3>🔄 Sauvegarde technique automatique</h3></div>
+      <p class="small-note">⚠️ Le fichier téléchargé ici (.json) n'est <b>pas destiné à être ouvert ou lu</b> — c'est le format que <b>seul le logiciel comprend</b> pour tout remettre en place en cas de problème (un peu comme un fichier Word ou Excel : on ne l'ouvre pas avec un simple bloc-notes). Gardez-le précieusement sans l'ouvrir ; pour lire quelque chose de compréhensible, utilisez plutôt le rapport PDF ci-dessus, ou Statistiques &amp; Bilans.</p>
+      <div class="perm-row" style="justify-content:space-between;">
+        <span>Télécharger automatiquement ce fichier technique une fois par jour (à la connexion)</span>
+        <label class="switch"><input type="checkbox" id="autoBackupToggle" ${DB.settings.autoBackupEnabled!==false?'checked':''} onchange="toggleAutoBackup(this.checked)"><span class="slider-tg"></span></label>
+      </div>
+      <p class="small-note" style="margin-top:10px;">Dernière sauvegarde technique téléchargée : <b>${DB.settings.lastAutoBackup? fmtDate(DB.settings.lastAutoBackup): 'jamais pour l\u2019instant'}</b> (renouvelée automatiquement toutes les 6 heures d'utilisation, à chaque connexion ou vente). Le fichier part dans votre dossier "Téléchargements" — pensez à le déplacer de temps en temps sur une clé USB ou un e-mail pour une sécurité complète (en cas de panne de cet ordinateur).</p>
+      <button class="btn btn-ghost" style="margin-top:6px;" onclick="downloadBackup()">⬇️ Télécharger cette sauvegarde technique maintenant</button>
+    </div>
+
+    <div class="card" style="max-width:560px;margin-top:18px;">
+      <div class="card-head"><h3>🕘 Points de restauration internes (7 derniers jours)</h3></div>
+      <p class="small-note">Conservés automatiquement dans ce navigateur, sans rien faire — utile pour annuler rapidement une erreur récente sans avoir besoin d'un fichier.</p>
+      ${snaps.length? `<div class="table-wrap"><table><thead><tr><th>Date</th><th></th></tr></thead>
+        <tbody>${snaps.map(d=>`<tr><td>${fmtDateOnly(d+'T00:00:00')}</td><td><button class="btn btn-ghost btn-sm" onclick="restoreSnapshot('${d}')">Restaurer ce point</button></td></tr>`).join('')}</tbody>
+      </table></div>` : `<div class="empty-state">Aucun point de restauration pour l'instant (revenez demain).</div>`}
+    </div>
+
+    <div class="card" style="max-width:560px;margin-top:18px;">
+      <div class="card-head"><h3>♻️ Restaurer depuis un fichier technique (.json)</h3></div>
       <p class="small-note">Réservé aux administrateurs. Le fichier importé remplacera <b>toutes</b> les données actuelles.</p>
       <input type="file" id="restoreFile" accept=".json">
       <button class="btn btn-danger" style="margin-top:10px;" onclick="restoreBackup()">Restaurer à partir du fichier</button>
     </div>`;
+  } else if(SETTINGS_TAB==='sync'){
+    body.innerHTML = renderSyncSettings();
+    setTimeout(()=>{ updateSyncBadge(); uiDetectIp(); }, 0);
   }
+}
+
+function toggleAutoBackup(enabled){
+  DB.settings.autoBackupEnabled = enabled;
+  saveDB();
+  toast(enabled? 'Sauvegarde automatique activée.' : 'Sauvegarde automatique désactivée.');
+}
+function restoreSnapshot(dateStr){
+  confirmAction(`Restaurer les données telles qu'elles étaient le ${fmtDateOnly(dateStr+'T00:00:00')} ? Toutes les modifications faites depuis seront perdues.`, ()=>{
+    try{
+      const raw = localStorage.getItem(SNAPSHOT_PREFIX + dateStr);
+      if(!raw){ toast('Point de restauration introuvable.', 'err'); return; }
+      DB = JSON.parse(raw);
+      saveDB();
+      toast('Données restaurées au ' + fmtDateOnly(dateStr+'T00:00:00') + '.');
+      location.reload();
+    }catch(e){ toast('Erreur lors de la restauration.', 'err'); }
+  }, 'Restaurer', true);
 }
 
 function addCategory(){
@@ -2629,16 +3131,16 @@ function doResetPassword(id){
 }
 
 /* ---------- Sauvegarde / Restauration ---------- */
-function downloadBackup(){
+function downloadBackup(silent){
   const blob = new Blob([JSON.stringify(DB,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = 'trnaja_sauvegarde_' + todayStr() + '.json';
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  logHistory('Sauvegarde téléchargée','');
+  logHistory(silent? 'Sauvegarde automatique téléchargée' : 'Sauvegarde téléchargée', '');
   saveDB();
-  toast('Sauvegarde téléchargée.');
+  toast(silent? '💾 Sauvegarde automatique du jour téléchargée.' : 'Sauvegarde téléchargée.');
 }
 function restoreBackup(){
   const f = document.getElementById('restoreFile').files[0];
@@ -2709,6 +3211,7 @@ function saveMyProfile(){
 ========================================================= */
 function printPDFDoc(title, subtitle, innerHtml){
   const area = document.getElementById('printArea');
+  area.className = ''; // page A4 normale (pas le format ticket étroit)
   area.innerHTML = `<div class="pdf-doc">
     <div class="pdf-head">
       <img src="${LOGO_B64}" alt="logo">
@@ -2834,27 +3337,10 @@ function exportCredits(){
 function exportStatsBilan(){
   const [s,e] = periodRange();
   const sales = salesBetween(s,e);
-  const headers = ['N° facture','Date','Client','Total','Bénéfice estimé'];
-  const rows = sales.map(sale=>[sale.number, fmtDate(sale.date), sale.clientName, sale.total, Math.round(estimateProfit(sale))]);
-  exportData('TRNaja_Bilan_'+STATS_PERIOD+'_'+todayStr(), 'Bilan', headers, rows);
-}
-function exportStatsBilanPDF(){
-  const [s,e] = periodRange();
-  const sales = salesBetween(s,e);
-  const expenses = DB.expenses.filter(x=>x.date>=s && x.date<=e);
-  const total = sumSales(sales);
-  const expTotal = expenses.reduce((a,x)=>a+x.amount,0);
   const showProfit = isAdmin() || can('seeProfit');
-  const profit = sales.reduce((a,x)=>a+estimateProfit(x),0);
-  const summary = `<h2>Résumé</h2><table><tbody>
-    <tr><td>Chiffre d'affaires</td><td>${fmtAr(total)}</td></tr>
-    <tr><td>Bénéfice estimé</td><td>${showProfit?fmtAr(profit):'—'}</td></tr>
-    <tr><td>Dépenses</td><td>${fmtAr(expTotal)}</td></tr>
-    <tr><td>Nombre de ventes</td><td>${sales.length}</td></tr>
-  </tbody></table>`;
-  const rows = sales.map(sale=>[sale.number, fmtDate(sale.date), sale.clientName, fmtAr(sale.total)]);
-  const detail = `<h2>Détail des ventes</h2>` + tableHtml(['N° facture','Date','Client','Total'], rows);
-  printPDFDoc('Bilan — '+({day:'Jour',week:'Semaine',month:'Mois',year:'Année'}[STATS_PERIOD]||''), '', summary+detail);
+  const headers = ['N° facture','Date','Client','Total'].concat(showProfit?['Bénéfice estimé']:[]);
+  const rows = sales.map(sale=>[sale.number, fmtDate(sale.date), sale.clientName, sale.total].concat(showProfit?[Math.round(estimateProfit(sale))]:[]));
+  exportData('TRNaja_Bilan_'+STATS_PERIOD+'_'+STATS_REF, 'Bilan', headers, rows);
 }
 
 /* =========================================================
@@ -2898,17 +3384,58 @@ function showStoreProducts(storeId){
         if(days<0) expBadge = '<span class="badge badge-red">Périmé</span>';
         else if(days<=(DB.settings.expiryWarnDays||30)) expBadge = `<span class="badge badge-orange">${days} j</span>`;
       }
+      const breakdown = formatStockBreakdown(p, qty);
+      const emptyB = p.special==='bottle' ? totalEmptyBottles(p.id, storeId) : null;
       return `<tr>
-        <td>${escapeHtml(p.name)}</td>
-        <td style="color:${isLow?'var(--red)':'inherit'};font-weight:${isLow?'700':'400'}">${fmtNum(qty)}</td>
+        <td>${escapeHtml(p.name)}${emptyB!==null? `<div class="small-note">🍾 Vides : ${fmtNum(emptyB)}</div>`:''}</td>
+        <td style="${stockCellStyle(qty, p.minThresholdBase)}">${breakdown||fmtNum(qty)}</td>
         <td>${fmtNum(p.minThresholdBase||0)}</td>
         <td>${p.expiryDate? fmtDateOnly(p.expiryDate):'—'} ${expBadge}</td>
-        <td>${isLow? '<span class="badge badge-orange">Stock faible</span>':'<span class="badge badge-green">OK</span>'}</td>
+        <td>${stockStateBadge(qty, p.minThresholdBase)}</td>
         ${isAdmin()? `<td><button class="btn btn-icon btn-sm" onclick="closeModal();openProductModal('${p.id}')">✏️</button></td>`:''}
       </tr>`;
     }).join('') : `<tr><td colspan="6"><div class="empty-state">Aucun produit associé à ce magasin.</div></td></tr>`}</tbody></table></div>
   `, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>` });
 }
+/* =========================================================
+   RAPPORT QUOTIDIEN LISIBLE (PDF) — pour le patron/le client, contrairement
+   au fichier de sauvegarde .json qui n'est utile qu'au logiciel lui-même.
+========================================================= */
+function generateDailyReportPDF(){
+  const [t0s,t0e] = dayRange(0);
+  const todaySales = salesBetween(t0s,t0e);
+  const session = getOpenCashSession();
+  const low = lowStockProducts();
+  const expiring = expiringProducts(DB.settings.expiryWarnDays||30);
+  const creditsOpen = DB.credits.filter(cr=>cr.remaining>0);
+  const todayExpenses = DB.expenses.filter(e=>e.date.slice(0,10)===todayStr()).reduce((a,e)=>a+e.amount,0);
+  const showProfit = isAdmin() || can('seeProfit');
+  const profit = showProfit ? todaySales.reduce((a,s)=>a+estimateProfit(s),0) : null;
+
+  const summary = `<h2>Résumé du jour</h2>
+    <table><tbody>
+      <tr><td>Ventes du jour</td><td><b>${fmtAr(sumSales(todaySales))}</b> (${todaySales.length} vente(s))</td></tr>
+      <tr><td>Dépenses du jour</td><td>${fmtAr(todayExpenses)}</td></tr>
+      ${showProfit? `<tr><td>Bénéfice estimé</td><td>${fmtAr(profit)}</td></tr>` : ''}
+      <tr><td>État de la caisse</td><td>${session? 'Ouverte — '+fmtAr(session.openingAmount)+' au départ' : 'Fermée'}</td></tr>
+      <tr><td>Total des crédits clients en cours</td><td>${fmtAr(creditsOpen.reduce((a,c)=>a+c.remaining,0))}</td></tr>
+    </tbody></table>`;
+
+  const stockSection = `<h2>🟠 Produits en stock faible (${low.length})</h2>` +
+    (low.length? tableHtml(['Produit','Stock','Seuil'], low.map(p=>[p.name, fmtNum(totalStock(p.id)), fmtNum(p.minThresholdBase||0)])) : '<p>Aucun.</p>');
+
+  const expirySection = `<h2>⏳ Produits proches de péremption (${expiring.length})</h2>` +
+    (expiring.length? tableHtml(['Produit','Péremption'], expiring.map(p=>[p.name, fmtDateOnly(p.expiryDate)])) : '<p>Aucun.</p>');
+
+  const creditsSection = `<h2>💳 Clients à crédit en cours (${creditsOpen.length})</h2>` +
+    (creditsOpen.length? tableHtml(['Client','Total','Payé','Reste'], creditsOpen.map(c=>[c.clientName, fmtAr(c.total), fmtAr(c.paid), fmtAr(c.remaining)])) : '<p>Aucun.</p>');
+
+  const salesSection = `<h2>🧾 Détail des ventes du jour</h2>` +
+    (todaySales.length? tableHtml(['N°','Heure','Client','Caissier','Total'], todaySales.map(s=>[s.number, fmtDate(s.date), s.clientName, s.cashierName, fmtAr(s.total)])) : '<p>Aucune vente aujourd\u2019hui.</p>');
+
+  printPDFDoc('Rapport journalier', fmtDateOnly(nowISO()), summary + stockSection + expirySection + creditsSection + salesSection);
+}
+
 function exportStoresReportPDF(){
   const rowsHtml = DB.stocks.map(s=>{
     const prods = DB.products.filter(p=>p.active!==false && (p.homeStockId===s.id || ((DB.stockLevels[p.id]||{})[s.id]||0)>0));
@@ -2983,9 +3510,362 @@ function quickAddStock(){
 }
 
 /* =========================================================
+   SYNCHRONISATION RÉSEAU (PocketBase) — OPTIONNELLE
+   Principe : le logiciel continue de fonctionner 100% en local
+   (localStorage) comme avant, que la synchronisation soit activée
+   ou non, et même si le serveur PocketBase est injoignable.
+   Quand elle est activée et que le serveur répond, toutes les
+   données (produits, ventes, stocks...) sont aussi recopiées vers
+   PocketBase, pour que d'autres ordinateurs du même réseau local
+   voient les mêmes informations.
+   Limite assumée : c'est une synchronisation "tout le dossier à la
+   fois" (pas ligne par ligne). En cas de modification simultanée
+   sur deux postes à quelques secondes d'intervalle, la dernière
+   sauvegarde gagne. Pour une petite boutique avec quelques caisses,
+   c'est largement suffisant.
+========================================================= */
+const SYNC_CONFIG_KEY = 'trnaja_sync_config_v1';
+const SYNC_COLLECTION = 'app_state';
+let SYNC = { url:'', enabled:false, recordId:'', deviceId:'', lastPush:null, lastPull:null, lastError:'', online:false };
+let SYNC_TIMER = null;
+let SYNC_PUSH_DEBOUNCE = null;
+let SYNC_BUSY = false;
+
+function loadSyncConfig(){
+  try{
+    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+    if(raw){ Object.assign(SYNC, JSON.parse(raw)); }
+  }catch(e){ /* ignore */ }
+  if(!SYNC.deviceId) SYNC.deviceId = uid('dev');
+  saveSyncConfigSilent();
+}
+function saveSyncConfigSilent(){
+  try{ localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify({ url:SYNC.url, enabled:SYNC.enabled, recordId:SYNC.recordId, deviceId:SYNC.deviceId })); }catch(e){}
+}
+function cleanPbUrl(u){ return (u||'').trim().replace(/\/+$/,''); }
+
+async function pbFetch(path, options, timeoutMs){
+  const controller = new AbortController();
+  const t = setTimeout(()=>controller.abort(), timeoutMs||4000);
+  try{
+    const res = await fetch(cleanPbUrl(SYNC.url) + path, Object.assign({ signal: controller.signal, headers: {'Content-Type':'application/json'} }, options||{}));
+    clearTimeout(t);
+    return res;
+  }catch(e){
+    clearTimeout(t);
+    throw e;
+  }
+}
+
+/* Extrait un message d'erreur lisible depuis une réponse PocketBase en échec */
+async function pbErrorText(res){
+  try{
+    const j = await res.json();
+    let detail = '';
+    if(j && j.data && typeof j.data==='object'){
+      const fields = Object.keys(j.data);
+      if(fields.length){
+        detail = ' → champ(s) en cause : ' + fields.map(f=>{
+          const fe = j.data[f];
+          return f + ' (' + (fe && (fe.message||fe.code) || 'invalide') + ')';
+        }).join(', ');
+      }
+    }
+    if(j && j.message) return 'HTTP '+res.status+' — '+j.message+detail;
+    return 'HTTP '+res.status+' — '+JSON.stringify(j).slice(0,300);
+  }catch(e){ return 'HTTP '+res.status; }
+}
+
+async function pbTestConnection(url){
+  const prevUrl = SYNC.url; SYNC.url = url;
+  try{
+    const res = await pbFetch('/api/health', {method:'GET'}, 3500);
+    SYNC.url = prevUrl;
+    if(res && res.ok) return {ok:true};
+    return {ok:false, message:'Le serveur a répondu mais avec une erreur ('+ (res?res.status:'?') +').'};
+  }catch(e){
+    SYNC.url = prevUrl;
+    return {ok:false, message:'Impossible de joindre ce serveur. Vérifiez l\u2019adresse et que PocketBase est bien lancé.'};
+  }
+}
+
+/* Vérifie que la collection "app_state" contient bien notre enregistrement partagé ;
+   le crée automatiquement au tout premier réglage si besoin. */
+async function pbEnsureRecord(){
+  const listRes = await pbFetch('/api/collections/'+SYNC_COLLECTION+'/records?perPage=1', {method:'GET'});
+  if(!listRes.ok){
+    if(listRes.status===404) throw new Error('COLLECTION_MISSING');
+    throw new Error(await pbErrorText(listRes));
+  }
+  const listData = await listRes.json();
+  if(listData.items && listData.items.length){
+    SYNC.recordId = listData.items[0].id;
+    saveSyncConfigSilent();
+    return listData.items[0];
+  }
+  // Aucun enregistrement encore : on crée celui qui contiendra toutes les données.
+  const createRes = await pbFetch('/api/collections/'+SYNC_COLLECTION+'/records', {
+    method:'POST', body: JSON.stringify({ data: JSON.stringify(DB) })
+  });
+  if(!createRes.ok) throw new Error(await pbErrorText(createRes));
+  const rec = await createRes.json();
+  SYNC.recordId = rec.id;
+  saveSyncConfigSilent();
+  return rec;
+}
+
+function dbTimestamp(){ return (DB.settings && DB.settings._syncStamp) || '1970-01-01T00:00:00.000Z'; }
+
+async function pbPull(silent){
+  if(!SYNC.enabled || !SYNC.url) return;
+  try{
+    if(!SYNC.recordId) await pbEnsureRecord();
+    const res = await pbFetch('/api/collections/'+SYNC_COLLECTION+'/records/'+SYNC.recordId, {method:'GET'});
+    if(!res.ok) throw new Error(await pbErrorText(res));
+    const rec = await res.json();
+    SYNC.online = true; SYNC.lastError = '';
+    const remote = JSON.parse(rec.data);
+    const remoteStamp = (remote.settings && remote.settings._syncStamp) || rec.updated || '1970-01-01T00:00:00.000Z';
+    if(remoteStamp > dbTimestamp()){
+      DB = remote;
+      saveDB(true); // true = ne renvoie pas immédiatement vers le serveur (évite une boucle)
+      if(!silent){ toast('Données mises à jour depuis le réseau.'); }
+      if(typeof refresh==='function' && SESSION.user) refresh();
+      updateSyncBadge();
+    }
+    SYNC.lastPull = nowISO();
+  }catch(e){
+    SYNC.online = false; SYNC.lastError = String(e.message||e);
+  }
+  updateSyncBadge();
+}
+
+async function pbPush(){
+  if(!SYNC.enabled || !SYNC.url) return;
+  if(SYNC_BUSY) return;
+  SYNC_BUSY = true;
+  try{
+    if(!SYNC.recordId) await pbEnsureRecord();
+    if(!DB.settings) DB.settings = {};
+    DB.settings._syncStamp = nowISO();
+    const res = await pbFetch('/api/collections/'+SYNC_COLLECTION+'/records/'+SYNC.recordId, {
+      method:'PATCH', body: JSON.stringify({ data: JSON.stringify(DB) })
+    });
+    if(!res.ok) throw new Error(await pbErrorText(res));
+    SYNC.online = true; SYNC.lastError=''; SYNC.lastPush = nowISO();
+  }catch(e){
+    SYNC.online = false; SYNC.lastError = String(e.message||e);
+  }
+  SYNC_BUSY = false;
+  updateSyncBadge();
+}
+
+/* Appelé automatiquement par saveDB() : regroupe les sauvegardes rapprochées
+   en un seul envoi réseau 2 secondes après la dernière modification. */
+function scheduleSyncPush(){
+  if(!SYNC.enabled || !SYNC.url) return;
+  clearTimeout(SYNC_PUSH_DEBOUNCE);
+  SYNC_PUSH_DEBOUNCE = setTimeout(()=>{ pbPush(); }, 2000);
+}
+function startSyncLoop(){
+  if(SYNC_TIMER) clearInterval(SYNC_TIMER);
+  if(!SYNC.enabled || !SYNC.url) return;
+  pbPull(true);
+  SYNC_TIMER = setInterval(()=>{ pbPull(true); }, 20000);
+}
+function updateSyncBadge(){
+  const el = document.getElementById('syncStatusBadge');
+  if(!el) return;
+  if(!SYNC.enabled){ el.innerHTML = ''; return; }
+  el.innerHTML = SYNC.online
+    ? '<span class="badge badge-green">🟢 Synchronisé en réseau</span>'
+    : '<span class="badge badge-red">🔴 Hors-ligne (mode local)</span>';
+}
+
+/* ---------- Paramètres → Synchronisation réseau ---------- */
+function renderSyncSettings(){
+  return `<div class="card" style="max-width:620px;border:2px solid var(--green-400);">
+    <div class="card-head"><h3>📍 Adresse à donner aux autres postes</h3><div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" onclick="uiDetectIp()">🔄 Actualiser</button>
+    </div>
+    <p class="small-note">Détectée automatiquement sur <b>cet ordinateur</b> (celui qui sert de serveur). Si l'adresse change (redémarrage du routeur, reconnexion WiFi...), cliquez sur "Actualiser" pour la remettre à jour.</p>
+    <div id="detectedIpBox">🔎 Détection en cours...</div>
+  </div>
+
+  <div class="card" style="max-width:620px;margin-top:18px;">
+    <div class="card-head"><h3>🌐 Synchronisation réseau (PocketBase)</h3></div>
+    <p class="small-note">Permet à plusieurs ordinateurs du même réseau local (WiFi du magasin) de partager les mêmes données. Le logiciel continue de fonctionner même sans réseau — la synchronisation est un plus, jamais une obligation.</p>
+    <div class="field"><label>Adresse du serveur PocketBase</label><input id="syncUrlInput" placeholder="ex: http://192.168.1.10:8090" value="${escapeHtml(SYNC.url||'')}"></div>
+    <div class="toolbar">
+      <button class="btn btn-ghost btn-sm" onclick="uiTestSync()">🔌 Tester la connexion</button>
+      <button class="btn btn-ghost btn-sm" onclick="uiInitSync()">⚙️ Initialiser / Connecter les données partagées</button>
+      <div class="spacer"></div>
+      <label class="switch"><input type="checkbox" id="syncEnabledToggle" ${SYNC.enabled?'checked':''} onchange="uiToggleSync(this.checked)"><span class="slider-tg"></span></label>
+    </div>
+    <div id="syncTestResult" class="small-note" style="margin-top:8px;"></div>
+    <hr class="sep">
+    <p class="small-note">
+      État : <span id="syncStatusBadge"></span><br>
+      Dernier envoi : ${SYNC.lastPush? fmtDate(SYNC.lastPush) : '—'}<br>
+      Dernière réception : ${SYNC.lastPull? fmtDate(SYNC.lastPull) : '—'}<br>
+      ${SYNC.lastError? '<span style="color:var(--red)">Dernière erreur : '+escapeHtml(SYNC.lastError)+'</span>' : ''}
+    </p>
+    <p class="hint">Sur les autres ordinateurs ou téléphones, ouvrez le même fichier du logiciel, venez dans cet écran et entrez l'adresse affichée en haut de cette page (celle détectée sur le PC serveur).</p>
+  </div>
+
+  <div class="card" style="max-width:620px;margin-top:18px;">
+    <div class="card-head"><h3>🛠️ Première installation du serveur (une seule fois)</h3></div>
+    <p class="small-note">À faire <b>une seule fois, sur un seul appareil</b>, après avoir créé le compte administrateur PocketBase. Le logiciel crée lui-même la « boîte » de données avec les bons réglages : plus rien à configurer dans PocketBase. Vos identifiants ne sont pas enregistrés.</p>
+    <div class="field"><label>E-mail administrateur PocketBase</label><input id="pbAdminEmail" type="email" autocomplete="off"></div>
+    <div class="field"><label>Mot de passe administrateur PocketBase</label><input id="pbAdminPass" type="password" autocomplete="off"></div>
+    <button class="btn btn-primary btn-sm" onclick="uiSetupServer()">⚙️ Préparer le serveur</button>
+    <div id="pbSetupResult" class="small-note" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card" style="max-width:620px;margin-top:18px;">
+    <div class="card-head"><h3>🔗 Lien de configuration automatique</h3></div>
+    <p class="small-note">Pour connecter un autre appareil sans rien taper, ouvrez le logiciel avec ce lien (même adresse que le logiciel, suivie de <code>?server=</code> et de l'adresse du serveur) :</p>
+    <div class="field"><input id="pbAutoLink" readonly onclick="this.select()"></div>
+    <button class="btn btn-ghost btn-sm" onclick="uiBuildAutoLink()">🔄 Générer le lien</button>
+  </div>`;
+}
+
+/* Crée la collection "app_state" sur le serveur PocketBase (avec les bons réglages), via le compte administrateur. */
+async function uiSetupServer(){
+  const box = document.getElementById('pbSetupResult');
+  const url = cleanPbUrl(document.getElementById('syncUrlInput').value);
+  const email = document.getElementById('pbAdminEmail').value.trim();
+  const pass = document.getElementById('pbAdminPass').value;
+  if(!url){ box.innerHTML = '<span style="color:var(--red)">❌ Indiquez d\u2019abord l\u2019adresse du serveur ci-dessus.</span>'; return; }
+  if(!email || !pass){ box.innerHTML = '<span style="color:var(--red)">❌ Entrez l\u2019e-mail et le mot de passe administrateur.</span>'; return; }
+  SYNC.url = url; saveSyncConfigSilent();
+  box.textContent = 'Préparation en cours...';
+  try{
+    const H = {'Content-Type':'application/json'};
+    const auth = await pbFetch('/api/collections/_superusers/auth-with-password', {method:'POST', headers:H, body: JSON.stringify({identity:email, password:pass})}, 8000);
+    if(!auth.ok) throw new Error('Identifiants administrateur refusés (' + await pbErrorText(auth) + ')');
+    const token = (await auth.json()).token;
+    const H2 = {'Content-Type':'application/json', 'Authorization': token};
+    const exists = await pbFetch('/api/collections/'+SYNC_COLLECTION, {method:'GET', headers:H2}, 8000);
+    const payload = {
+      listRule:'', viewRule:'', createRule:'', updateRule:'',
+      fields:[{ name:'data', type:'text', required:false, min:0, max:50000000 }]
+    };
+    let res;
+    if(exists.ok){
+      // La collection existe déjà : on remet les bons réglages (accès ouvert + taille illimitée) sans toucher aux champs système.
+      const col = await exists.json();
+      const fields = (col.fields||[]).map(f => f.name==='data' ? Object.assign({}, f, {min:0, max:50000000}) : f);
+      if(!fields.some(f=>f.name==='data')) fields.push(payload.fields[0]);
+      res = await pbFetch('/api/collections/'+col.id, {method:'PATCH', headers:H2, body: JSON.stringify({listRule:'', viewRule:'', createRule:'', updateRule:'', fields})}, 8000);
+    } else {
+      res = await pbFetch('/api/collections', {method:'POST', headers:H2, body: JSON.stringify(Object.assign({name:SYNC_COLLECTION, type:'base'}, payload))}, 8000);
+    }
+    if(!res.ok) throw new Error(await pbErrorText(res));
+    document.getElementById('pbAdminPass').value = '';
+    await pbEnsureRecord();
+    box.innerHTML = '<span style="color:var(--green-700);">✅ Serveur prêt. Activez maintenant l\u2019interrupteur de synchronisation ci-dessus.</span>';
+    toast('Serveur préparé.');
+  }catch(e){
+    box.innerHTML = '<span style="color:var(--red);">❌ ' + escapeHtml(e.message||String(e)) + '</span>';
+  }
+}
+function uiBuildAutoLink(){
+  const server = cleanPbUrl(document.getElementById('syncUrlInput').value || SYNC.url);
+  const base = location.protocol==='file:' ? '(adresse du logiciel)' : (location.origin + location.pathname);
+  document.getElementById('pbAutoLink').value = server ? (base + '?server=' + server) : '';
+}
+
+/* =========================================================
+   DÉTECTION AUTOMATIQUE DE L'ADRESSE LOCALE (best effort)
+   Utilise une astuce WebRTC standard pour deviner l'adresse IP
+   locale de cette machine sur le réseau WiFi/Ethernet, afin que
+   l'administrateur n'ait pas besoin de connaître ce terme technique.
+   Certains navigateurs récents masquent volontairement cette info
+   (protection de la vie privée) : dans ce cas, un message clair
+   explique comment la trouver manuellement, sans bloquer l'usage.
+========================================================= */
+function detectLocalIP(callback){
+  try{
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    let found = null, done = false;
+    const finish = (val)=>{ if(done) return; done = true; try{ pc.close(); }catch(e){} callback(val); };
+    pc.createDataChannel('');
+    pc.onicecandidate = (e)=>{
+      if(!e.candidate){ finish(found); return; }
+      const m = /([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
+      if(m && m[1]!=='127.0.0.1' && !m[1].startsWith('0.')) found = m[1];
+    };
+    pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>finish(null));
+    setTimeout(()=>finish(found), 1800);
+  }catch(e){ callback(null); }
+}
+function guessedPortFromCurrentUrl(){
+  const m = /:(\d+)\s*$/.exec(cleanPbUrl(SYNC.url||''));
+  return m ? m[1] : '8090';
+}
+function uiDetectIp(){
+  const box = document.getElementById('detectedIpBox');
+  if(!box) return;
+  box.innerHTML = '🔎 Détection en cours...';
+  detectLocalIP((ip)=>{
+    if(!box) return;
+    if(ip){
+      const url = 'http://'+ip+':'+guessedPortFromCurrentUrl();
+      box.innerHTML = `
+        <div style="font-size:20px;font-weight:800;color:var(--green-800);background:var(--green-50);padding:12px 16px;border-radius:10px;display:flex;align-items:center;gap:10px;">
+          📡 <span id="detectedIpValue">${escapeHtml(url)}</span>
+        </div>
+        <div class="toolbar" style="margin-top:10px;">
+          <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard && navigator.clipboard.writeText('${url}'); toast('Adresse copiée.')">📋 Copier</button>
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('syncUrlInput').value='${url}';toast('Adresse appliquée ci-dessous.')">✅ Utiliser cette adresse ici</button>
+        </div>
+        <p class="hint" style="margin-top:8px;">C'est cette adresse (<b>${escapeHtml(url)}</b>) qu'il faut recopier sur les autres ordinateurs/téléphones, dans ce même écran "🌐 Réseau".</p>`;
+    } else {
+      box.innerHTML = `<p class="small-note" style="color:var(--orange);">⚠️ Détection automatique impossible sur ce navigateur (certains navigateurs récents la bloquent pour la vie privée).
+      Trouvez-la manuellement : sur Mac,  → Réglages Système → Wi-Fi → Détails ; sur Windows, Paramètres → Réseau → Propriétés. Cherchez une adresse du type <code>192.168.x.x</code>, puis saisissez-la ci-dessous suivie de <code>:8090</code>.</p>`;
+    }
+  });
+}
+async function uiTestSync(){
+  const url = document.getElementById('syncUrlInput').value.trim();
+  const box = document.getElementById('syncTestResult');
+  box.textContent = 'Test en cours...';
+  const r = await pbTestConnection(url);
+  box.innerHTML = r.ok ? '<span style="color:var(--green-700);">✅ Connexion réussie.</span>' : '<span style="color:var(--red);">❌ '+escapeHtml(r.message)+'</span>';
+}
+async function uiInitSync(){
+  const url = document.getElementById('syncUrlInput').value.trim();
+  if(!url){ toast('Indiquez d\u2019abord l\u2019adresse du serveur.', 'err'); return; }
+  SYNC.url = url; saveSyncConfigSilent();
+  const box = document.getElementById('syncTestResult');
+  box.textContent = 'Connexion à la collection partagée...';
+  try{
+    await pbEnsureRecord();
+    box.innerHTML = '<span style="color:var(--green-700);">✅ Connecté. Vous pouvez activer la synchronisation.</span>';
+    toast('Données partagées prêtes.');
+  }catch(e){
+    if(String(e.message)==='COLLECTION_MISSING'){
+      box.innerHTML = '<span style="color:var(--red);">❌ La collection "app_state" n\u2019existe pas encore sur le serveur. Créez-la depuis l\u2019interface PocketBase (voir instructions) puis réessayez.</span>';
+    } else {
+      box.innerHTML = '<span style="color:var(--red);">❌ Échec : '+escapeHtml(e.message)+'</span>';
+    }
+  }
+}
+function uiToggleSync(checked){
+  const url = document.getElementById('syncUrlInput').value.trim();
+  if(checked && !url){ toast('Indiquez et testez d\u2019abord l\u2019adresse du serveur.', 'err'); document.getElementById('syncEnabledToggle').checked=false; return; }
+  SYNC.url = url; SYNC.enabled = checked;
+  saveSyncConfigSilent();
+  if(checked){ startSyncLoop(); toast('Synchronisation activée.'); }
+  else { if(SYNC_TIMER) clearInterval(SYNC_TIMER); toast('Synchronisation désactivée (mode local uniquement).'); }
+  updateSyncBadge();
+}
+
+/* =========================================================
    ALIASES & INITIALISATION
 ========================================================= */
-const App = { login: ()=>App_login(), logout: ()=>App_logout(), showForgot: ()=>App_showForgot(), showSignup: ()=>App_showSignup() };
+const App = { login: ()=>App_login(), logout: ()=>App_logout(), showForgot: ()=>App_showForgot() };
 
 document.getElementById('loginLogoImg').src = LOGO_B64;
 document.getElementById('sidebarLogoImg').src = LOGO_B64;
@@ -3002,6 +3882,32 @@ setInterval(()=>{
 }, 20000);
 
 loadDB();
+loadSyncConfig();
+/* Si le logiciel est ouvert DEPUIS le serveur PocketBase lui-même (ex: http://192.168.1.137:8090/,
+   grâce au dossier pb_public), on pré-remplit automatiquement l'adresse de synchronisation avec
+   celle de la page en cours — l'utilisateur n'a alors quasiment rien à taper. */
+/* Configuration automatique du serveur de synchronisation, sans rien taper :
+   1) lien avec ?server=https://mon-serveur.pockethost.io  -> adresse enregistrée et synchronisation activée ;
+   2) logiciel servi par PocketBase lui-même (dossier pb_public) -> on utilise sa propre adresse, si elle répond. */
+(function autoConfigServer(){
+  try{
+    const q = new URLSearchParams(location.search).get('server');
+    if(q){
+      SYNC.url = cleanPbUrl(q); SYNC.enabled = true; SYNC.recordId = '';
+      saveSyncConfigSilent();
+      history.replaceState(null, '', location.pathname); // retire le paramètre de la barre d'adresse
+      return;
+    }
+  }catch(e){}
+  if(location.protocol!=='file:' && !SYNC.url){
+    const origin = location.origin;
+    fetch(origin + '/api/health').then(r=>{
+      if(r && r.ok && !SYNC.url){ SYNC.url = origin; saveSyncConfigSilent(); }
+    }).catch(()=>{});
+  }
+})();
+if(SYNC.enabled) startSyncLoop();
+tryRestoreSession();
 
 </script>
 </body>

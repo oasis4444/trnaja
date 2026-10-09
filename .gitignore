@@ -1,0 +1,8 @@
+node_modules/
+dist/
+desktop/app/
+pb_data/
+pocketbase/pocketbase
+pocketbase/pocketbase.exe
+.tmp/
+.DS_Store

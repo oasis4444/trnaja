@@ -3902,7 +3902,7 @@ loadSyncConfig();
   if(location.protocol!=='file:' && !SYNC.url){
     const origin = location.origin;
     fetch(origin + '/api/health').then(r=>{
-      if(r && r.ok && !SYNC.url){ SYNC.url = origin; saveSyncConfigSilent(); }
+      if(r && r.ok && !SYNC.url){ SYNC.url = origin; SYNC.enabled = true; SYNC.recordId = ''; saveSyncConfigSilent(); startSyncLoop(); }
     }).catch(()=>{});
   }
 })();

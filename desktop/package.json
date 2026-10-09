@@ -19,10 +19,19 @@
   "build": {
     "appId": "com.trnaja.gestion",
     "productName": "TR Naja - Gestion",
-    "directories": { "output": "dist" },
-    "files": ["main.js", "app/**/*", "build/**/*"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "app/**/*",
+      "build/**/*"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }],
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -33,13 +42,17 @@
       "shortcutName": "TR Naja - Gestion"
     },
     "mac": {
-    "mac": {
-      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
       "icon": "build/icon.png",
       "category": "public.app-category.business",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
-    "dmg": { "title": "TR Naja - Gestion", "window": { "width": 540, "height": 380 } }
+    "dmg": {
+      "title": "TR Naja - Gestion",
+      "window": { "width": 540, "height": 380 }
+    }
   }
 }

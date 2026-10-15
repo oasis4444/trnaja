@@ -524,6 +524,8 @@ function fmtNum(n){
   if(Object.is(n,-0)) n = 0;
   return n.toLocaleString('fr-FR', {maximumFractionDigits:4});
 }
+function normProductName(n){ return String(n||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim(); }
+function findProductByName(name, exceptId){ const k=normProductName(name); if(!k) return null; return DB.products.find(p=>p.id!==exceptId && normProductName(p.name)===k) || null; }
 function roundQty(n){ n = Math.round((Number(n)||0)*10000)/10000; return Object.is(n,-0)?0:n; }
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function byId(arr,id){ return (arr||[]).find(x=>x.id===id); }
@@ -1601,7 +1603,7 @@ function openProductModal(id){
     title: p? 'Modifier le produit' : 'Nouveau produit',
     large: true,
     bodyHtml,
-    footHtml: `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveProduct(${p?`'${p.id}'`:'null'})">Enregistrer</button>`
+    footHtml: `${p?`<button class="btn btn-ghost" onclick="showEntryHistory('${p.id}')">📜 Historique des entrées</button>`:''}<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveProduct(${p?`'${p.id}'`:'null'})">Enregistrer</button>`
   });
   setTimeout(()=>{ toggleBottleFields(); refreshUnitChainMarkers(); }, 0);
 }
@@ -1671,6 +1673,19 @@ function saveProduct(id){
     logHistory('Produit modifié', p.name);
     toast('Produit mis à jour.');
   } else {
+    const dup = findProductByName(name);
+    if(dup){
+      if(!(totalInitQtyBase>0)){ toast('Le produit « '+dup.name+' » existe déjà. Ouvrez-le (✏️) pour le modifier, ou ajoutez du stock dans « Entrée de stock ».', 'err'); return; }
+      if(dup.active===false) dup.active = true;
+      if(!DB.stockLevels[dup.id]) DB.stockLevels[dup.id] = {};
+      const sid = data.homeStockId || dup.homeStockId;
+      DB.stockLevels[dup.id][sid] = roundQty((DB.stockLevels[dup.id][sid]||0) + totalInitQtyBase);
+      DB.stockMovements.unshift({id:uid('mv'), type:'entry', productId:dup.id, productName:dup.name, qty:roundQty(totalInitQtyBase), fromStock:null, toStock:sid, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Ajout sur produit existant ('+initBreakdown+')'});
+      logHistory('Entrée de stock (produit déjà existant)', dup.name+' +'+totalInitQtyBase);
+      saveDB(); closeModal(); refresh();
+      toast('Produit déjà existant : '+initBreakdown+' ajouté(s) à « '+dup.name+' » (aucune nouvelle ligne créée).');
+      return;
+    }
     const p = { id: uid('p'), entryDate: nowISO(), code:'', barcode:'', brand:'', location:'', locationNumber:'', ...data };
     DB.products.push(p);
     if(!DB.stockLevels[p.id]) DB.stockLevels[p.id] = {};
@@ -2061,7 +2076,7 @@ function confirmImport(){
     let stock = DB.stocks.find(s=>s.name.toLowerCase()===r.stock.toLowerCase());
     if(!stock){ stock = r.stock? {id:uid('stk'), name:r.stock} : DB.stocks[0]; if(r.stock && !DB.stocks.includes(stock)) DB.stocks.push(stock); }
 
-    let prod = DB.products.find(p=> (r.code && p.code===r.code) || p.name.toLowerCase()===r.name.toLowerCase());
+    let prod = DB.products.find(p=> (r.code && p.code===r.code)) || findProductByName(r.name);
     if(!prod){
       prod = {
         id: uid('p'), code: r.code, barcode:'', name: r.name, categoryId: cat?cat.id:'', supplierId: sup?sup.id:'',
@@ -2083,8 +2098,11 @@ function confirmImport(){
     }
     if(r.qty > 0){
       if(!DB.stockLevels[prod.id]) DB.stockLevels[prod.id]={};
-      DB.stockLevels[prod.id][stock.id] = roundQty((DB.stockLevels[prod.id][stock.id]||0) + r.qty);
-      DB.stockMovements.unshift({id:uid('mv'), type:'import', productId:prod.id, productName:prod.name, qty:r.qty, fromStock:null, toStock:stock.id, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Import Excel/CSV'});
+      const iu = r.unite && prod.units ? prod.units.find(u=>normProductName(u.name)===normProductName(r.unite)) : null;
+      const baseQty = roundQty(r.qty*(iu?iu.qtyInBase:1));
+      if(prod.active===false) prod.active = true;
+      DB.stockLevels[prod.id][stock.id] = roundQty((DB.stockLevels[prod.id][stock.id]||0) + baseQty);
+      DB.stockMovements.unshift({id:uid('mv'), type:'import', productId:prod.id, productName:prod.name, qty:baseQty, fromStock:null, toStock:stock.id, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:'Import Excel/CSV'});
     }
   });
   logHistory('Import de stock', `${created} créés, ${updated} mis à jour`);
@@ -2596,11 +2614,14 @@ function switchStockOpsTab(t){
   if(t==='entry'){
     body.innerHTML = `<div class="card" style="max-width:560px;">
       <div class="form-grid">
-        <div class="field full"><label>Produit</label><select id="entryProduct">${DB.products.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select></div>
+        <div class="field full"><label>Produit</label><select id="entryProduct" onchange="entryFillUnits()">${DB.products.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select></div>
         <div class="field"><label>Stock de destination</label><select id="entryStock">${DB.stocks.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
-        <div class="field"><label>Quantité (unité de base)</label><input type="number" id="entryQty" min="0.01" step="any"></div>
+        <div class="field"><label>Unité</label><select id="entryUnit"></select></div>
+        <div class="field"><label>Quantité à ajouter</label><input type="number" id="entryQty" min="0.01" step="any"></div>
+        <div class="field full"><button class="link-btn" type="button" onclick="showEntryHistory(document.getElementById('entryProduct').value)">📜 Voir l'historique des entrées de ce produit</button></div>
         <div class="field full"><label>Note (fournisseur, référence bon de livraison...)</label><input id="entryNote"></div>
       </div>
+      <p class="small-note">Si le produit existe déjà, la quantité est <b>ajoutée</b> à son stock (pas de nouvelle ligne). Chaque ajout reste visible dans l'historique.</p>
       <button class="btn btn-primary" style="margin-top:10px;" onclick="doStockEntry()">+ Enregistrer l'entrée</button>
     </div>
     <div class="card" style="margin-top:18px;">
@@ -2610,6 +2631,7 @@ function switchStockOpsTab(t){
       <tbody>${(()=>{ const last = DB.stockMovements.filter(m=>m.type==='entry'||m.type==='import').slice(0,10);
         return last.length? last.map(m=>`<tr><td>${fmtDate(m.date)}</td><td>${escapeHtml(m.productName)}</td><td style="color:var(--green-700)">+${fmtNum(m.qty)}</td><td>${escapeHtml(stockName(m.toStock))}</td><td>${escapeHtml(m.userName)}</td><td>${entryActionCell(m)}</td></tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">Aucune entrée pour l'instant.</div></td></tr>`; })()}</tbody></table></div>
     </div>`;
+    entryFillUnits();
   } else if(t==='transfer'){
     body.innerHTML = `<div class="card" style="max-width:560px;">
       <div class="form-grid">
@@ -2667,18 +2689,47 @@ function doCancelEntry(mvId){
   toast('Entrée annulée, stock corrigé.');
 }
 
+function entryFillUnits(){
+  const sel = document.getElementById('entryUnit'); const ps = document.getElementById('entryProduct');
+  if(!sel || !ps) return;
+  const p = byId(DB.products, ps.value);
+  const units = p && p.units ? [...p.units].sort((a,b)=>b.qtyInBase-a.qtyInBase) : [];
+  sel.innerHTML = units.map(u=>`<option value="${u.id}" data-q="${u.qtyInBase}">${escapeHtml(u.name)}${u.qtyInBase!==1?' (= '+fmtNum(u.qtyInBase)+' '+escapeHtml(units[units.length-1].name)+')':''}</option>`).join('');
+  if(units.length) sel.value = units[units.length-1].id; // unité de base par défaut
+}
 function doStockEntry(){
   const productId = document.getElementById('entryProduct').value;
   const stockId = document.getElementById('entryStock').value;
-  const qty = parseFloat(document.getElementById('entryQty').value);
+  const qtyIn = parseFloat(document.getElementById('entryQty').value);
   const note = document.getElementById('entryNote').value.trim();
-  if(!productId || !qty || qty<=0){ toast('Veuillez indiquer un produit et une quantité valide.', 'err'); return; }
+  if(!productId || !qtyIn || qtyIn<=0){ toast('Veuillez indiquer un produit et une quantité valide.', 'err'); return; }
+  const p = byId(DB.products, productId);
+  const uSel = document.getElementById('entryUnit');
+  const unit = p.units && p.units.find(u=>u.id===(uSel&&uSel.value));
+  const factor = unit ? unit.qtyInBase : 1;
+  const qty = roundQty(qtyIn*factor);
   if(!DB.stockLevels[productId]) DB.stockLevels[productId]={};
   DB.stockLevels[productId][stockId] = roundQty((DB.stockLevels[productId][stockId]||0) + qty);
-  const p = byId(DB.products, productId);
-  DB.stockMovements.unshift({id:uid('mv'), type:'entry', productId, productName:p.name, qty, fromStock:null, toStock:stockId, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note});
+  const lbl = unit && factor!==1 ? `${fmtNum(qtyIn)} ${unit.name}` : '';
+  DB.stockMovements.unshift({id:uid('mv'), type:'entry', productId, productName:p.name, qty, fromStock:null, toStock:stockId, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note: (lbl?('['+lbl+'] '):'')+note, enteredQty:qtyIn, enteredUnit:unit?unit.name:''});
   logHistory('Entrée de stock', `${p.name} +${qty} (${stockName(stockId)})`);
-  saveDB(); toast('Entrée de stock enregistrée.'); switchStockOpsTab('entry');
+  saveDB(); toast('Entrée enregistrée : '+p.name+' = '+fmtNum(stockTotal(productId))+' en stock.'); switchStockOpsTab('entry');
+}
+function stockTotal(pid){ return Object.values(DB.stockLevels[pid]||{}).reduce((a,b)=>a+(b||0),0); }
+function showEntryHistory(pid){
+  const p = byId(DB.products, pid); if(!p) return;
+  const mv = DB.stockMovements.filter(m=>m.productId===pid && (m.type==='entry'||m.type==='import'||m.type==='cancel_entry'))
+    .slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const ok = mv.filter(m=>(m.type==='entry'||m.type==='import') && !m.cancelled).reduce((a,m)=>a+m.qty,0);
+  const mainU = p.units && [...p.units].sort((a,b)=>a.qtyInBase-b.qtyInBase)[0];
+  openModal({
+    title: '📜 Historique des entrées — '+p.name, large:true,
+    bodyHtml: `<p style="font-size:14px;">Stock actuel : <b>${fmtNum(stockTotal(pid))} ${escapeHtml(mainU?mainU.name:'')}</b> · Total des entrées valides : <b>${fmtNum(ok)}</b></p>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Quantité ajoutée</th><th>Magasin</th><th>Utilisateur</th><th>Note</th></tr></thead><tbody>
+      ${mv.length? mv.map(m=>`<tr><td>${fmtDate(m.date)}</td><td style="color:${m.qty<0?'var(--red)':'var(--green-700)'}">${m.qty>0?'+':''}${fmtNum(m.qty)} ${escapeHtml(mainU?mainU.name:'')}${m.enteredUnit&&m.enteredUnit!==(mainU&&mainU.name)?'<div class="small-note">('+fmtNum(m.enteredQty)+' '+escapeHtml(m.enteredUnit)+')</div>':''}${m.cancelled?' <span class="badge badge-red">Annulée</span>':''}</td><td>${escapeHtml(stockName(m.toStock||m.fromStock))}</td><td>${escapeHtml(m.userName||'—')}</td><td>${escapeHtml(m.note||'')}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty-state">Aucune entrée enregistrée.</div></td></tr>'}
+      </tbody></table></div>`,
+    footHtml: `<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`
+  });
 }
 function updateTransferAvail(){
   const pid = document.getElementById('trProduct').value;

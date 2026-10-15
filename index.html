@@ -1214,9 +1214,17 @@ function lowStockProducts(){
     return totalStock(p.id) <= (p.minThresholdBase||0);
   });
 }
-function expiringProducts(days){
-  const lim = new Date(); lim.setDate(lim.getDate()+ (days||30));
-  return DB.products.filter(p=>p.active!==false && p.expiryDate).filter(p=> new Date(p.expiryDate) <= lim);
+/* Seuil d'alerte de péremption : propre à chaque produit s'il est renseigné, sinon seuil général (Paramètres) */
+function expiryWarnFor(p){
+  const v = p && p.expiryWarnDays;
+  if(v!==undefined && v!==null && v!=='' && !isNaN(v)) return Number(v);
+  return DB.settings.expiryWarnDays||30;
+}
+function expiringProducts(){
+  return DB.products.filter(p=>p.active!==false && p.expiryDate).filter(p=>{
+    const lim = new Date(); lim.setDate(lim.getDate() + expiryWarnFor(p));
+    return new Date(p.expiryDate) <= lim;
+  });
 }
 function totalStock(productId){
   const levels = DB.stockLevels[productId] || {};
@@ -1391,7 +1399,7 @@ function renderProdTable(){
       const days = Math.ceil((new Date(p.expiryDate) - new Date())/86400000);
       expTxt = fmtDateOnly(p.expiryDate);
       if(days<0) expBadge = '<span class="badge badge-red">Périmé</span>';
-      else if(days<=(DB.settings.expiryWarnDays||30)) expBadge = `<span class="badge badge-orange">${days} j</span>`;
+      else if(days<=expiryWarnFor(p)) expBadge = `<span class="badge badge-orange">${days} j</span>`;
     }
     const breakdown = formatStockBreakdown(p, tot);
     const emptyBottles = p.special==='bottle' ? totalEmptyBottles(p.id) : null;
@@ -1566,6 +1574,7 @@ function openProductModal(id){
       </div>
       <div class="field"><label>Seuil minimum (en unité de base)</label><input id="pdMinThreshold" type="number" min="0" value="${p?p.minThresholdBase:(DB.settings.lowStockDefault||5)}"></div>
       <div class="field"><label>Date de péremption</label><input id="pdExpiry" type="date" value="${p&&p.expiryDate?p.expiryDate.slice(0,10):''}"></div>
+      <div class="field"><label>Alerte avant péremption (jours)</label><input id="pdExpiryWarn" type="number" min="0" step="1" placeholder="Général : ${DB.settings.expiryWarnDays||30} j" value="${p&&p.expiryWarnDays!==undefined&&p.expiryWarnDays!==null?p.expiryWarnDays:''}"></div>
       <div class="field full"><label>Observation</label><input id="pdNotes" value="${p?escapeHtml(p.notes||''):''}"></div>
     </div>
     <hr class="sep">
@@ -1650,6 +1659,7 @@ function saveProduct(id){
     purchasePrice: purchasePricePerBase,
     minThresholdBase: parseFloat(document.getElementById('pdMinThreshold').value)||0,
     expiryDate: document.getElementById('pdExpiry').value || null,
+    expiryWarnDays: (document.getElementById('pdExpiryWarn').value.trim()==='' ? null : Math.max(0, parseInt(document.getElementById('pdExpiryWarn').value,10)||0)),
     notes: document.getElementById('pdNotes').value.trim(),
     units,
     active: true,
@@ -3480,7 +3490,7 @@ function renderSettingsBody(){
     body.innerHTML = `<div class="card" style="max-width:520px;">
       <div class="field"><label>Nom du magasin</label><input id="genShopName" value="${escapeHtml(DB.settings.shopName)}"></div>
       <div class="field"><label>Seuil de stock faible par défaut</label><input type="number" id="genLowStock" value="${DB.settings.lowStockDefault}"></div>
-      <div class="field"><label>Alerte péremption (jours avant)</label><input type="number" id="genExpiryDays" value="${DB.settings.expiryWarnDays}"></div>
+      <div class="field"><label>Alerte péremption par défaut (jours avant) — réglable produit par produit</label><input type="number" id="genExpiryDays" value="${DB.settings.expiryWarnDays}"></div>
       <button class="btn btn-primary" onclick="saveGeneralSettings()">Enregistrer</button>
     </div>`;
   } else if(SETTINGS_TAB==='backup'){
@@ -3856,7 +3866,7 @@ function render_stores(c){
       <tbody>${DB.stocks.map(s=>{
         const prods = DB.products.filter(p=>p.active!==false && (p.homeStockId===s.id || ((DB.stockLevels[p.id]||{})[s.id]||0)>0));
         const lowInStore = prods.filter(p=> ((DB.stockLevels[p.id]||{})[s.id]||0) <= (p.minThresholdBase||0));
-        const expInStore = prods.filter(p=> p.expiryDate && new Date(p.expiryDate) <= new Date(Date.now()+(DB.settings.expiryWarnDays||30)*86400000));
+        const expInStore = prods.filter(p=> p.expiryDate && new Date(p.expiryDate) <= new Date(Date.now()+expiryWarnFor(p)*86400000));
         return `<tr>
         <td><b>${escapeHtml(s.name)}</b></td>
         <td>${escapeHtml(s.address||'—')}</td>
@@ -3884,7 +3894,7 @@ function showStoreProducts(storeId){
       if(p.expiryDate){
         const days = Math.ceil((new Date(p.expiryDate) - new Date())/86400000);
         if(days<0) expBadge = '<span class="badge badge-red">Périmé</span>';
-        else if(days<=(DB.settings.expiryWarnDays||30)) expBadge = `<span class="badge badge-orange">${days} j</span>`;
+        else if(days<=expiryWarnFor(p)) expBadge = `<span class="badge badge-orange">${days} j</span>`;
       }
       const breakdown = formatStockBreakdown(p, qty);
       const emptyB = p.special==='bottle' ? totalEmptyBottles(p.id, storeId) : null;

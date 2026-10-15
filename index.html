@@ -628,6 +628,7 @@ function seedDB(){
     stocks: [ stockA, stockB ],
     categories: ['Gaz / Vitogaz','Boissons STAR','Eau','Riz','Produits en sac/gony','Huile','Savon','Cigarettes','Biscuits','Pâtes','Vinaigre','Anti-moustiques','Papier hygiénique','Épices','Autres'].map(n=>({id:uid('cat'),name:n})),
     suppliers: [],
+    purchases: [], // achats fournisseurs {id,number,date,supplierId,supplierName,lines:[{productId,name,unitName,qty,unitPrice,total}],total,paid,status}
     products: [], // {id,code,barcode,name,categoryId,supplierId,brand,description,homeStockId,location,locationNumber,units:[{id,name,qtyInBase,priceWholesale,priceRetail,priceWithBottle,priceWithoutBottle}],purchasePrice,minThresholdBase,entryDate,expiryDate,notes,special (null|'bottle'), active}
     stockLevels: {}, // { productId: { stockId: qtyBase } }
     emptyBottles: {}, // { productId: { stockId: nb bouteilles vides collectées } }
@@ -651,6 +652,7 @@ function migrateDB(){
   if(!Array.isArray(DB.credits)) DB.credits = [];
   if(!Array.isArray(DB.expenses)) DB.expenses = [];
   if(!Array.isArray(DB.suppliers)) DB.suppliers = [];
+  if(!Array.isArray(DB.purchases)) DB.purchases = [];
   if(!Array.isArray(DB.sales)) DB.sales = [];
   if(!Array.isArray(DB.stockMovements)) DB.stockMovements = [];
   if(!Array.isArray(DB.history)) DB.history = [];
@@ -1676,22 +1678,200 @@ function saveProduct(id){
 }
 
 /* =========================================================
-   FOURNISSEURS
+   FOURNISSEURS + ACHATS AUPRÈS DES FOURNISSEURS
 ========================================================= */
+let SUPPLIERS_TAB = 'list';
+let PURCH_FILTER = { supplierId:'', period:'all' };
 function render_suppliers(c){
+  if(!Array.isArray(DB.purchases)) DB.purchases = [];
   c.innerHTML = `
+    <div class="tabs-h">
+      <div class="tab-h ${SUPPLIERS_TAB==='list'?'active':''}" onclick="SUPPLIERS_TAB='list';refresh()">🚚 Fournisseurs</div>
+      <div class="tab-h ${SUPPLIERS_TAB==='purchases'?'active':''}" onclick="SUPPLIERS_TAB='purchases';refresh()">🧾 Achats auprès des fournisseurs</div>
+    </div>
+    <div id="suppliersBody"></div>`;
+  const body = document.getElementById('suppliersBody');
+  if(SUPPLIERS_TAB==='purchases') return renderPurchasesTab(body);
+  body.innerHTML = `
     <div class="toolbar"><div class="spacer"></div><button class="btn btn-primary" onclick="openSupplierModal()">+ Nouveau fournisseur</button></div>
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Nom</th><th>Téléphone</th><th>Adresse</th><th>Produits fournis (nb)</th><th></th></tr></thead>
+      <thead><tr><th>Nom</th><th>Téléphone</th><th>Adresse</th><th>Produits fournis (nb)</th><th>Achats</th><th>Total acheté</th><th></th></tr></thead>
       <tbody>${DB.suppliers.length? DB.suppliers.map(s=>{
         const nbProd = DB.products.filter(p=>p.supplierId===s.id).length;
+        const pur = DB.purchases.filter(x=>x.supplierId===s.id && x.status!=='cancelled');
         return `<tr><td><b>${escapeHtml(s.name)}</b></td><td>${escapeHtml(s.phone||'—')}</td><td>${escapeHtml(s.address||'—')}</td><td>${nbProd}</td>
-        <td><button class="btn btn-icon btn-sm" onclick="openSupplierModal('${s.id}')">✏️</button>
+        <td>${pur.length}</td><td>${fmtAr(pur.reduce((a,x)=>a+x.total,0))}</td>
+        <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="openPurchaseModal('${s.id}')">➕ Achat</button>
+        <button class="btn btn-ghost btn-sm" onclick="PURCH_FILTER.supplierId='${s.id}';SUPPLIERS_TAB='purchases';refresh()">📜 Historique</button>
+        <button class="btn btn-icon btn-sm" onclick="openSupplierModal('${s.id}')">✏️</button>
         <button class="btn btn-icon btn-sm" onclick="deleteSupplier('${s.id}')">🗑️</button></td></tr>`;
-      }).join('') : `<tr><td colspan="5"><div class="empty-state"><div class="em-ico">🚚</div>Aucun fournisseur enregistré.</div></td></tr>`}</tbody>
-    </table></div></div>
-  `;
+      }).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-ico">🚚</div>Aucun fournisseur enregistré.</div></td></tr>`}</tbody>
+    </table></div></div>`;
 }
+function purchaseInPeriod(p){
+  const f = PURCH_FILTER.period; if(f==='all') return true;
+  const d = new Date(p.date), n = new Date();
+  if(f==='month') return d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth();
+  if(f==='year') return d.getFullYear()===n.getFullYear();
+  return true;
+}
+function filteredPurchases(){
+  return (DB.purchases||[]).filter(p=>(!PURCH_FILTER.supplierId || p.supplierId===PURCH_FILTER.supplierId) && purchaseInPeriod(p))
+    .slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+}
+function renderPurchasesTab(body){
+  const list = filteredPurchases();
+  const valid = list.filter(p=>p.status!=='cancelled');
+  body.innerHTML = `
+    <div class="toolbar" style="flex-wrap:wrap;gap:8px;">
+      <select onchange="PURCH_FILTER.supplierId=this.value;refresh()"><option value="">Tous les fournisseurs</option>${DB.suppliers.map(s=>`<option value="${s.id}" ${PURCH_FILTER.supplierId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}</select>
+      <select onchange="PURCH_FILTER.period=this.value;refresh()"><option value="all" ${PURCH_FILTER.period==='all'?'selected':''}>Toute la période</option><option value="month" ${PURCH_FILTER.period==='month'?'selected':''}>Ce mois</option><option value="year" ${PURCH_FILTER.period==='year'?'selected':''}>Cette année</option></select>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" onclick="exportPurchases()">📤 Excel</button>
+      <button class="btn btn-ghost" onclick="printPurchasesReport()">🖨️ Imprimer la liste</button>
+      <button class="btn btn-primary" onclick="openPurchaseModal()">+ Nouvel achat</button>
+    </div>
+    <div class="grid grid-3" style="margin-bottom:12px;">
+      <div class="kpi"><div class="lbl">Nombre d'achats</div><div class="val">${valid.length}</div></div>
+      <div class="kpi"><div class="lbl">Total acheté</div><div class="val">${fmtAr(valid.reduce((a,p)=>a+p.total,0))}</div></div>
+      <div class="kpi"><div class="lbl">Reste dû aux fournisseurs</div><div class="val" style="color:var(--red);">${fmtAr(valid.reduce((a,p)=>a+Math.max(0,p.total-p.paid),0))}</div></div>
+    </div>
+    <div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>N°</th><th>Fournisseur</th><th>Produits</th><th style="text-align:right;">Total</th><th style="text-align:right;">Payé</th><th style="text-align:right;">Reste dû</th><th>Par</th><th></th></tr></thead>
+      <tbody>${list.length? list.map(p=>`<tr style="${p.status==='cancelled'?'opacity:.55;':''}">
+        <td>${fmtDateOnly(p.date)}</td><td>${escapeHtml(p.number)}</td><td><b>${escapeHtml(p.supplierName)}</b></td>
+        <td>${p.lines.map(l=>escapeHtml(l.name)+' ×'+fmtNum(l.qty)+' '+escapeHtml(l.unitName)).join(', ')}</td>
+        <td style="text-align:right;">${fmtAr(p.total)}</td><td style="text-align:right;">${fmtAr(p.paid)}</td>
+        <td style="text-align:right;color:${p.total-p.paid>0?'var(--red)':'inherit'};">${fmtAr(Math.max(0,p.total-p.paid))}</td><td>${escapeHtml(p.userName||'')}</td>
+        <td style="white-space:nowrap;">${p.status==='cancelled'?'<span class="badge badge-red">Annulé</span>':`<button class="btn btn-ghost btn-sm" onclick="printPurchase('${p.id}')">🖨️</button> <button class="btn btn-danger btn-sm" onclick="openCancelPurchaseModal('${p.id}')">Annuler</button>`}
+        <button class="btn btn-icon btn-sm" onclick="showPurchase('${p.id}')">👁️</button></td></tr>`).join('') : `<tr><td colspan="9"><div class="empty-state"><div class="em-ico">🧾</div>Aucun achat enregistré.</div></td></tr>`}</tbody>
+    </table></div></div>`;
+}
+let PURCH_LINES = [];
+function purchUnitPrice(prod, unitId){
+  const u = (prod.units||[]).find(x=>x.id===unitId) || prod.units[0];
+  return Math.round((prod.purchasePrice||0) * (u.qtyInBase||1));
+}
+function openPurchaseModal(supplierId){
+  if(!DB.suppliers.length){ toast('Créez d’abord un fournisseur.', 'err'); return; }
+  if(!DB.products.length){ toast('Créez d’abord des produits.', 'err'); return; }
+  const first = DB.products.filter(p=>p.active!==false)[0] || DB.products[0];
+  PURCH_LINES = [{ productId:first.id, unitId:first.units[0].id, qty:1, unitPrice:purchUnitPrice(first, first.units[0].id) }];
+  openModal({ title:'Nouvel achat auprès d’un fournisseur', large:true, bodyHtml:`
+    <div class="form-grid">
+      <div class="field"><label>Fournisseur *</label><select id="puSupplier">${DB.suppliers.map(s=>`<option value="${s.id}" ${s.id===supplierId?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Date de l'achat</label><input type="date" id="puDate" value="${todayStr()}"></div>
+      <div class="field"><label>N° bon / facture du fournisseur</label><input id="puRef" placeholder="facultatif"></div>
+      <div class="field"><label>Stock de destination</label><select id="puStock">${DB.stocks.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
+    </div>
+    <h4 style="margin:12px 0 6px;">Produits achetés</h4>
+    <div id="puLines"></div>
+    <button class="btn btn-ghost btn-sm" onclick="addPurchLine()">+ Ajouter un produit</button>
+    <div class="form-grid" style="margin-top:12px;">
+      <div class="field"><label>Total de l'achat</label><input id="puTotal" readonly style="font-weight:700;"></div>
+      <div class="field"><label>Montant payé au fournisseur (Ar)</label><input type="number" id="puPaid" min="0" placeholder="= total si tout est payé"></div>
+    </div>
+    <label class="perm-row"><span>Ajouter ces quantités au stock</span><span class="switch"><input type="checkbox" id="puStockOn" checked><span class="slider-tg"></span></span></label>
+    <label class="perm-row"><span>Mettre à jour le prix d'achat des produits (pour le calcul du bénéfice)</span><span class="switch"><input type="checkbox" id="puPriceOn" checked><span class="slider-tg"></span></span></label>
+  `, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="savePurchase()">Enregistrer l'achat</button>` });
+  renderPurchLines();
+}
+function renderPurchLines(){
+  const box = document.getElementById('puLines'); if(!box) return;
+  const prods = DB.products.filter(p=>p.active!==false);
+  box.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Produit</th><th>Unité</th><th>Quantité</th><th>Prix d'achat unitaire</th><th style="text-align:right;">Montant</th><th></th></tr></thead><tbody>` +
+    PURCH_LINES.map((l,i)=>{ const p = byId(DB.products,l.productId);
+      return `<tr><td><select onchange="purchLineProduct(${i},this.value)">${prods.map(x=>`<option value="${x.id}" ${x.id===l.productId?'selected':''}>${escapeHtml(x.name)}</option>`).join('')}</select></td>
+      <td><select onchange="purchLineUnit(${i},this.value)">${p.units.map(u=>`<option value="${u.id}" ${u.id===l.unitId?'selected':''}>${escapeHtml(u.name)}</option>`).join('')}</select></td>
+      <td><input type="number" min="0" step="any" value="${l.qty}" style="width:90px;" oninput="PURCH_LINES[${i}].qty=parseFloat(this.value)||0;updatePurchTotals()"></td>
+      <td><input type="number" min="0" step="any" value="${l.unitPrice}" style="width:120px;" oninput="PURCH_LINES[${i}].unitPrice=parseFloat(this.value)||0;updatePurchTotals()"></td>
+      <td style="text-align:right;" id="puLineTot${i}">${fmtAr(l.qty*l.unitPrice)}</td>
+      <td>${PURCH_LINES.length>1?`<button class="btn btn-icon btn-sm" onclick="PURCH_LINES.splice(${i},1);renderPurchLines()">✕</button>`:''}</td></tr>`; }).join('') + `</tbody></table></div>`;
+  updatePurchTotals();
+}
+function purchLineProduct(i, pid){ const p=byId(DB.products,pid); PURCH_LINES[i].productId=pid; PURCH_LINES[i].unitId=p.units[0].id; PURCH_LINES[i].unitPrice=purchUnitPrice(p,p.units[0].id); renderPurchLines(); }
+function purchLineUnit(i, uid_){ const l=PURCH_LINES[i]; l.unitId=uid_; l.unitPrice=purchUnitPrice(byId(DB.products,l.productId),uid_); renderPurchLines(); }
+function addPurchLine(){ const p = DB.products.filter(x=>x.active!==false)[0]; PURCH_LINES.push({productId:p.id,unitId:p.units[0].id,qty:1,unitPrice:purchUnitPrice(p,p.units[0].id)}); renderPurchLines(); }
+function updatePurchTotals(){
+  let t = 0; PURCH_LINES.forEach((l,i)=>{ const v=(l.qty||0)*(l.unitPrice||0); t+=v; const el=document.getElementById('puLineTot'+i); if(el) el.textContent=fmtAr(v); });
+  const tot=document.getElementById('puTotal'); if(tot) tot.value = fmtAr(t);
+  return t;
+}
+function nextPurchaseNumber(){ const n = DB.settings.nextPurchaseNo || 1; DB.settings.nextPurchaseNo = n+1; return 'A' + String(n).padStart(5,'0'); }
+function savePurchase(){
+  const supplierId = document.getElementById('puSupplier').value, sup = byId(DB.suppliers, supplierId);
+  const lines = PURCH_LINES.filter(l=>l.qty>0);
+  if(!sup){ toast('Choisissez un fournisseur.', 'err'); return; }
+  if(!lines.length){ toast('Indiquez au moins un produit avec une quantité.', 'err'); return; }
+  const total = lines.reduce((a,l)=>a+l.qty*l.unitPrice,0);
+  const paidRaw = document.getElementById('puPaid').value;
+  const paid = paidRaw==='' ? total : Math.min(total, Math.max(0, parseFloat(paidRaw)||0));
+  const stockId = document.getElementById('puStock').value;
+  const toStock = document.getElementById('puStockOn').checked, updPrice = document.getElementById('puPriceOn').checked;
+  const dateVal = document.getElementById('puDate').value || todayStr();
+  const when = dateVal===todayStr() ? nowISO() : new Date(dateVal+'T12:00:00').toISOString();
+  const ref = document.getElementById('puRef').value.trim();
+  const number = nextPurchaseNumber();
+  const pur = { id: uid('pa'), number, date: when, supplierId, supplierName: sup.name, ref, stockId, addedToStock: toStock, total, paid, status:'valid',
+    userId: SESSION.user.id, userName: SESSION.user.username, lines: [], movementIds: [] };
+  lines.forEach(l=>{
+    const p = byId(DB.products,l.productId), u = p.units.find(x=>x.id===l.unitId)||p.units[0], base = l.qty*(u.qtyInBase||1);
+    pur.lines.push({ productId:p.id, name:p.name, unitId:u.id, unitName:u.name, unitQtyInBase:u.qtyInBase||1, qty:l.qty, unitPrice:l.unitPrice, total:l.qty*l.unitPrice });
+    if(toStock){
+      if(!DB.stockLevels[p.id]) DB.stockLevels[p.id] = {};
+      DB.stockLevels[p.id][stockId] = roundQty((DB.stockLevels[p.id][stockId]||0) + base);
+      const mv = {id:uid('mv'), type:'entry', productId:p.id, productName:p.name, qty:roundQty(base), fromStock:null, toStock:stockId, date:when, userId:SESSION.user.id, userName:SESSION.user.username, note:`Achat ${number} — ${sup.name} (${fmtNum(l.qty)} ${u.name})`, purchaseId: pur.id};
+      DB.stockMovements.unshift(mv); pur.movementIds.push(mv.id);
+    }
+    if(updPrice && l.unitPrice>0) p.purchasePrice = l.unitPrice / (u.qtyInBase||1);
+    if(!p.supplierId) p.supplierId = supplierId;
+  });
+  if(!Array.isArray(DB.purchases)) DB.purchases = [];
+  DB.purchases.unshift(pur);
+  addNotification('stock', `Achat ${number} enregistré — ${sup.name} — ${fmtAr(total)}.`);
+  logHistory('Achat fournisseur', `${number} — ${sup.name} — ${fmtAr(total)}`);
+  saveDB(); closeModal(); SUPPLIERS_TAB='purchases'; refresh();
+  toast('Achat enregistré' + (toStock?' et ajouté au stock.':'.'));
+}
+function purchaseDocHtml(p){
+  return `<h2 style="margin-top:0;">Bon d'achat n° ${escapeHtml(p.number)}</h2>
+    <p style="font-size:13px;"><b>Fournisseur :</b> ${escapeHtml(p.supplierName)} — <b>Date :</b> ${fmtDateOnly(p.date)}${p.ref?' — <b>Réf. fournisseur :</b> '+escapeHtml(p.ref):''}</p>
+    <table><thead><tr><th>Produit</th><th>Unité</th><th style="text-align:right;">Qté</th><th style="text-align:right;">Prix unitaire</th><th style="text-align:right;">Montant</th></tr></thead>
+    <tbody>${p.lines.map(l=>`<tr><td>${escapeHtml(l.name)}</td><td>${escapeHtml(l.unitName)}</td><td style="text-align:right;">${fmtNum(l.qty)}</td><td style="text-align:right;">${fmtAr(l.unitPrice)}</td><td style="text-align:right;">${fmtAr(l.total)}</td></tr>`).join('')}</tbody></table>
+    <table style="width:50%;margin-left:auto;"><tr><td><b>Total</b></td><td style="text-align:right;"><b>${fmtAr(p.total)}</b></td></tr><tr><td>Payé</td><td style="text-align:right;">${fmtAr(p.paid)}</td></tr><tr><td>Reste dû</td><td style="text-align:right;">${fmtAr(Math.max(0,p.total-p.paid))}</td></tr></table>
+    <p style="font-size:12px;color:#555;">Enregistré par ${escapeHtml(p.userName||'')}${p.status==='cancelled'?' — <b>ACHAT ANNULÉ</b>':''}</p>`;
+}
+function showPurchase(id){ const p = byId(DB.purchases,id); openModal({ title:'Achat '+p.number, large:true, bodyHtml: `<div class="pdf-doc" style="padding:0;">${purchaseDocHtml(p)}</div>`, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="printPurchase('${id}')">🖨️ Imprimer</button>` }); }
+function printPurchase(id){ closeModal(); printPDFDoc('Bon d’achat fournisseur', DB.settings.shopName||'TR Naja', purchaseDocHtml(byId(DB.purchases,id))); }
+function printPurchasesReport(){
+  const list = filteredPurchases().filter(p=>p.status!=='cancelled');
+  const sup = PURCH_FILTER.supplierId ? (byId(DB.suppliers,PURCH_FILTER.supplierId)||{}).name : 'Tous les fournisseurs';
+  const rows = []; list.forEach(p=>p.lines.forEach((l,i)=>rows.push([i===0?fmtDateOnly(p.date):'', i===0?p.number:'', i===0?p.supplierName:'', l.name, l.unitName, fmtNum(l.qty), fmtAr(l.unitPrice), fmtAr(l.total)])));
+  printPDFDoc('Achats auprès des fournisseurs', sup, tableHtml(['Date','N°','Fournisseur','Produit','Unité','Qté','Prix unitaire','Montant'], rows) + `<p><b>Total acheté : ${fmtAr(list.reduce((a,p)=>a+p.total,0))}</b></p>`);
+}
+function exportPurchases(){
+  const rows = []; filteredPurchases().forEach(p=>p.lines.forEach(l=>rows.push([fmtDateOnly(p.date), p.number, p.supplierName, p.ref||'', l.name, l.unitName, l.qty, l.unitPrice, l.total, p.status==='cancelled'?'Annulé':'', p.userName||''])));
+  exportData('TRNaja_Achats_'+todayStr(), 'Achats', ['Date','N°','Fournisseur','Réf. fournisseur','Produit','Unité','Quantité','Prix unitaire','Montant','État','Par'], rows);
+}
+function openCancelPurchaseModal(id){
+  const p = byId(DB.purchases,id);
+  openModal({ title:'Annuler l’achat '+p.number, bodyHtml:`<p>Achat de <b>${fmtAr(p.total)}</b> chez <b>${escapeHtml(p.supplierName)}</b>.${p.addedToStock?' Les quantités ajoutées au stock seront retirées.':''}</p><div class="field"><label>Motif *</label><input id="cancelPurReason"></div>`,
+    footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button><button class="btn btn-danger" onclick="cancelPurchase('${id}')">Confirmer l'annulation</button>` });
+}
+function cancelPurchase(id){
+  const p = byId(DB.purchases,id), reason = document.getElementById('cancelPurReason').value.trim();
+  if(!reason){ toast('Le motif est obligatoire.', 'err'); return; }
+  if(p.addedToStock){
+    for(const l of p.lines){ const avail=(DB.stockLevels[l.productId]||{})[p.stockId]||0; if(l.qty*l.unitQtyInBase > avail+0.0001){ toast(`Impossible : ${l.name} n’est plus disponible en quantité suffisante (déjà vendu ou transféré).`, 'err'); return; } }
+    p.lines.forEach(l=>{ DB.stockLevels[l.productId][p.stockId] = roundQty(DB.stockLevels[l.productId][p.stockId] - l.qty*l.unitQtyInBase);
+      DB.stockMovements.unshift({id:uid('mv'), type:'cancel_entry', productId:l.productId, productName:l.name, qty:-roundQty(l.qty*l.unitQtyInBase), fromStock:p.stockId, toStock:null, date:nowISO(), userId:SESSION.user.id, userName:SESSION.user.username, note:`Annulation achat ${p.number} — ${reason}`}); });
+    (p.movementIds||[]).forEach(mid=>{ const m=byId(DB.stockMovements,mid); if(m){ m.cancelled=true; m.cancelReason=reason; m.cancelledBy=SESSION.user.username; m.cancelledAt=nowISO(); } });
+  }
+  p.status='cancelled'; p.cancelReason=reason; p.cancelledBy=SESSION.user.username; p.cancelledAt=nowISO();
+  logHistory('Achat fournisseur annulé', `${p.number} — ${reason}`);
+  saveDB(); closeModal(); refresh(); toast('Achat annulé.');
+}
+
 function openSupplierModal(id){
   const s = id? byId(DB.suppliers,id):null;
   openModal({

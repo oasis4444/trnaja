@@ -6,3 +6,5 @@
 - Un contrôle syntaxe : extraire le `<script>` et le passer à `new Function`.
 - Desktop : `desktop/` (Electron), le workflow copie `index.html` dans `desktop/app/`.
 - Commits : terminer par `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` et `Claude-Session: https://claude.ai/code/session_01AZBPRmm5Y7XfzgbPDiTZ61`.
+- Excel : pas de bibliothèque externe, `MX` (mini-xlsx, dans index.html) lit/écrit les .xlsx hors-ligne. Ticket 58/80 mm : `ticketWidth()` (localStorage), `fitReceiptPageHeight`.
+- Sauvegarde externe : module `EXT` (dossier choisi, File System Access API), restauration `restoreFromData`. Produits identiques : `findProductByName`. Rapports : `render_salesReport`.

@@ -4,9 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TR Naja — Gestion</title>
-<!-- Bibliothèque optionnelle pour lire/écrire de vrais fichiers .xlsx (nécessite une connexion internet une seule fois).
-     Si absente ou hors-ligne, le logiciel bascule automatiquement sur l'import/export CSV (compatible Excel, fonctionne sans internet). -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer onerror="window.__XLSX_FAILED__=true"></script>
 <style>
 :root{
   --green-950:#062b1c;
@@ -1999,7 +1996,8 @@ function parseCSVText(text){
 
 function parseDateFR(s){
   if(!s) return null;
-  s = s.trim();
+  s = String(s).trim();
+  if(/^\d{5}(\.\d+)?$/.test(s) && +s>20000 && +s<80000){ return new Date(Math.round((+s-25569)*86400000)).toISOString().slice(0,10); } // date Excel (numéro de série)
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
   const m2 = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -2007,24 +2005,125 @@ function parseDateFR(s){
   return null;
 }
 
+/* =========================================================
+   MINI-XLSX : lecture / écriture de fichiers Excel (.xlsx) SANS internet
+   (pas de bibliothèque externe : tout est dans ce fichier)
+========================================================= */
+const MX = (function(){
+  const te = new TextEncoder(), td = new TextDecoder('utf-8');
+  let CRC_T = null;
+  function crc32(u8){
+    if(!CRC_T){ CRC_T = new Uint32Array(256); for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c = (c&1)? (0xEDB88320^(c>>>1)) : (c>>>1); CRC_T[n]=c>>>0; } }
+    let c = 0xFFFFFFFF; for(let i=0;i<u8.length;i++) c = CRC_T[(c^u8[i])&255]^(c>>>8); return (c^0xFFFFFFFF)>>>0;
+  }
+  async function inflateRaw(u8){
+    if(typeof DecompressionStream==='undefined') throw new Error('Ce navigateur ne sait pas lire les fichiers .xlsx compressés. Enregistrez le fichier en CSV.');
+    const ds = new DecompressionStream('deflate-raw');
+    const out = new Response(new Blob([u8]).stream().pipeThrough(ds));
+    return new Uint8Array(await out.arrayBuffer());
+  }
+  async function unzip(buf){
+    const u8 = new Uint8Array(buf), dv = new DataView(buf);
+    let eocd = -1;
+    for(let i=u8.length-22;i>=Math.max(0,u8.length-65558);i--){ if(dv.getUint32(i,true)===0x06054b50){ eocd=i; break; } }
+    if(eocd<0) throw new Error("Ce fichier n'est pas un vrai fichier .xlsx");
+    const n = dv.getUint16(eocd+10,true); let p = dv.getUint32(eocd+16,true);
+    const files = {};
+    for(let i=0;i<n;i++){
+      if(dv.getUint32(p,true)!==0x02014b50) break;
+      const method=dv.getUint16(p+10,true), csize=dv.getUint32(p+20,true), nl=dv.getUint16(p+28,true), el=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true), lho=dv.getUint32(p+42,true);
+      const name = td.decode(u8.subarray(p+46,p+46+nl));
+      const lnl=dv.getUint16(lho+26,true), lel=dv.getUint16(lho+28,true), ds=lho+30+lnl+lel;
+      files[name] = { method, data: u8.subarray(ds, ds+csize) };
+      p += 46+nl+el+cl;
+    }
+    return files;
+  }
+  async function text(files, name){
+    const f = files[name]; if(!f) return null;
+    const d = f.method===0 ? f.data : await inflateRaw(f.data);
+    return td.decode(d);
+  }
+  function xml(s){ return new DOMParser().parseFromString(s,'application/xml'); }
+  function colIdx(ref){ const m = /^([A-Z]+)/.exec(ref); let n=0; for(const ch of m[1]) n = n*26 + (ch.charCodeAt(0)-64); return n-1; }
+  async function read(buf){
+    const files = await unzip(buf);
+    const ss = [];
+    const sst = await text(files,'xl/sharedStrings.xml');
+    if(sst){ xml(sst).querySelectorAll('si').forEach(si=>{ ss.push(Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')); }); }
+    // première feuille
+    let path = 'xl/worksheets/sheet1.xml';
+    try{
+      const wb = xml(await text(files,'xl/workbook.xml')), rels = xml(await text(files,'xl/_rels/workbook.xml.rels'));
+      const sh = wb.querySelector('sheets > sheet'); const rid = sh && (sh.getAttribute('r:id') || sh.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id'));
+      const rel = Array.from(rels.querySelectorAll('Relationship')).find(r=>r.getAttribute('Id')===rid);
+      if(rel){ let t = rel.getAttribute('Target'); path = t.startsWith('/') ? t.slice(1) : 'xl/'+t.replace(/^\.\//,''); }
+    }catch(e){}
+    if(!files[path]){ const k = Object.keys(files).filter(x=>/^xl\/worksheets\/[^/]+\.xml$/.test(x)).sort()[0]; if(k) path = k; }
+    const sx = await text(files, path); if(!sx) throw new Error('Aucune feuille trouvée dans le fichier.');
+    const rows = [];
+    xml(sx).querySelectorAll('sheetData > row').forEach(r=>{
+      const row = [];
+      r.querySelectorAll(':scope > c').forEach(c=>{
+        const ref = c.getAttribute('r'); const i = ref ? colIdx(ref) : row.length; const t = c.getAttribute('t');
+        let v = '';
+        if(t==='inlineStr'){ v = Array.from(c.querySelectorAll('t')).map(x=>x.textContent).join(''); }
+        else { const ve = c.querySelector('v'); v = ve ? ve.textContent : ''; if(t==='s') v = ss[parseInt(v,10)] ?? ''; else if(t==='b') v = v==='1' ? 'Oui':'Non'; }
+        while(row.length<i) row.push('');
+        row[i] = String(v);
+      });
+      const ri = parseInt(r.getAttribute('r'),10); if(ri){ while(rows.length<ri-1) rows.push([]); rows[ri-1] = row; } else rows.push(row);
+    });
+    return rows;
+  }
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,''); }
+  function colName(i){ let s=''; i++; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; }
+  function write(sheetName, aoa){
+    const rowsXml = aoa.map((row,ri)=>'<row r="'+(ri+1)+'">'+row.map((v,ci)=>{
+      const ref = colName(ci)+(ri+1);
+      if(v===null||v===undefined||v==='') return '';
+      if(typeof v==='number' && isFinite(v)) return '<c r="'+ref+'"><v>'+v+'</v></c>';
+      return '<c r="'+ref+'" t="inlineStr"><is><t xml:space="preserve">'+esc(v)+'</t></is></c>';
+    }).join('')+'</row>').join('');
+    const nm = esc(String(sheetName||'Feuille1').replace(/[\\/?*\[\]:]/g,' ').slice(0,31));
+    const parts = {
+      '[Content_Types].xml':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+      '_rels/.rels':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      'xl/workbook.xml':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="'+nm+'" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      'xl/_rels/workbook.xml.rels':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+      'xl/worksheets/sheet1.xml':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+rowsXml+'</sheetData></worksheet>'
+    };
+    // zip « stocké » (sans compression)
+    const chunks=[], central=[]; let off=0;
+    const u32=(v)=>[v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255], u16=(v)=>[v&255,(v>>>8)&255];
+    Object.keys(parts).forEach(name=>{
+      const nb = te.encode(name), db = te.encode(parts[name]), crc = crc32(db);
+      const lh = new Uint8Array([0x50,0x4b,3,4, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(db.length), ...u32(db.length), ...u16(nb.length), ...u16(0)]);
+      chunks.push(lh, nb, db);
+      central.push(new Uint8Array([0x50,0x4b,1,2, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(db.length), ...u32(db.length), ...u16(nb.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nb);
+      off += lh.length+nb.length+db.length;
+    });
+    let csz=0; central.forEach(c=>csz+=c.length);
+    const eocd = new Uint8Array([0x50,0x4b,5,6, 0,0,0,0, ...u16(Object.keys(parts).length), ...u16(Object.keys(parts).length), ...u32(csz), ...u32(off), 0,0]);
+    return new Blob([...chunks, ...central, eocd], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  }
+  return { read, write };
+})();
+
 function handleImportFile(evt){
   const file = evt.target.files[0];
   if(!file) return;
   const fb = document.getElementById('importFeedback');
   const name = file.name.toLowerCase();
   if(name.endsWith('.xlsx') || name.endsWith('.xls')){
-    if(typeof XLSX === 'undefined'){
-      fb.innerHTML = `<div class="login-error" style="display:block;">La lecture directe des fichiers .xlsx nécessite une connexion internet (une seule fois). Aucune connexion détectée. Merci d'enregistrer votre fichier au format <b>CSV</b> depuis Excel (Fichier → Enregistrer sous → CSV), puis réessayez.</div>`;
+    if(name.endsWith('.xls')){
+      fb.innerHTML = `<div class="login-error" style="display:block;">Ancien format .xls non lisible. Dans Excel : Fichier → Enregistrer sous → « Classeur Excel (.xlsx) » ou « CSV », puis réessayez.</div>`;
       return;
     }
     const reader = new FileReader();
     reader.onload = (e)=>{
-      try{
-        const wb = XLSX.read(e.target.result, {type:'array'});
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(sheet, {header:1, raw:false, defval:''});
-        processImportRows(rows);
-      }catch(err){ fb.innerHTML = `<div class="login-error" style="display:block;">Erreur de lecture du fichier Excel : ${escapeHtml(err.message)}</div>`; }
+      MX.read(e.target.result).then(rows=>processImportRows(rows))
+        .catch(err=>{ fb.innerHTML = `<div class="login-error" style="display:block;">Erreur de lecture du fichier Excel : ${escapeHtml(err.message)}</div>`; });
     };
     reader.readAsArrayBuffer(file);
   } else {
@@ -3964,21 +4063,22 @@ function downloadBlob(filename, content, mime){
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
+function downloadBlobRaw(filename, blob){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+}
 function exportData(filenameBase, sheetName, headers, rows){
   if(!rows.length){ toast('Aucune donnée à exporter.', 'err'); return; }
-  if(typeof XLSX !== 'undefined'){
-    try{
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-      XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0,31));
-      XLSX.writeFile(wb, filenameBase + '.xlsx');
-      toast('Fichier Excel (.xlsx) téléchargé.');
-      return;
-    }catch(e){ console.error(e); }
-  }
+  try{
+    downloadBlobRaw(filenameBase + '.xlsx', MX.write(sheetName, [headers, ...rows]));
+    toast('Fichier Excel (.xlsx) téléchargé.');
+    return;
+  }catch(e){ console.error(e); }
   downloadBlob(filenameBase + '.csv', toCSVString(headers, rows), 'text/csv;charset=utf-8;');
-  const extraMsg = typeof XLSX==='undefined' ? ' Connectez-vous à internet une fois pour activer l\u2019export .xlsx direct.' : '';
-  toast('Fichier CSV téléchargé (compatible Excel).' + extraMsg, 'warn');
+  toast('Fichier CSV téléchargé (compatible Excel).', 'warn');
 }
 
 function exportProducts(){

@@ -424,6 +424,11 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .card-alert-orange{background:#fdf1de;border-color:#f5dcab;}
 .card-alert-orange .card-head h3{color:#9a5b0f;}
 .select-row select{flex:1;}
+.ext-pill{cursor:pointer;font-size:13px;font-weight:600;padding:7px 12px;border-radius:999px;margin-right:8px;white-space:nowrap;}
+.ext-pill.ok{background:#e6f4ea;color:#1e7a3c;}
+.ext-pill.warn{background:#fff4e0;color:#b36b00;}
+.ext-pill.bad{background:#fdecea;color:#c0392b;}
+@media(max-width:700px){.ext-pill{font-size:11px;padding:5px 8px;}}
 </style>
 </head>
 <body>
@@ -481,6 +486,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
       </div>
       <div class="spacer"></div>
       <button class="icon-btn-bell" title="Notifications" onclick="openNotifications()">🔔<span class="notif-count" id="notifBadge" style="display:none;">0</span></button>
+      <div class="ext-pill warn" id="extPill" onclick="extPillClick()" style="display:none;"></div>
       <div class="cash-pill closed" id="cashPill"><span class="dot"></span><span id="cashPillTxt">Caisse fermée</span></div>
     </div>
     <div class="content" id="pageContent"></div>
@@ -669,6 +675,7 @@ function loadDB(){
 function saveDB(skipSyncPush){
   localStorage.setItem(DB_KEY, JSON.stringify(DB));
   if(!skipSyncPush && typeof scheduleSyncPush==='function') scheduleSyncPush();
+  if(typeof extMarkDirty==='function') extMarkDirty();
 }
 function logHistory(action, details){
   DB.history.unshift({ id: uid('h'), date: nowISO(), userId: SESSION.user? SESSION.user.id:null, userName: SESSION.user? SESSION.user.fullName||SESSION.user.username : 'Système', action, details: details||'' });
@@ -704,6 +711,193 @@ function maybeRunAutoBackup(){
     DB.settings.lastAutoBackup = nowISO();
     saveDB();
   }catch(e){ console.warn('Sauvegarde automatique impossible :', e); }
+}
+
+/* =========================================================
+   SAUVEGARDE EXTERNE AUTOMATIQUE (hors de l'ordinateur / du navigateur)
+   Le logiciel écrit tout seul un fichier de sauvegarde dans un dossier choisi une fois
+   (clé USB, disque réseau, dossier Google Drive / OneDrive synchronisé...).
+   Fonctionne avec Chrome et Edge. Rotation : 20 derniers fichiers du jour + 1 par jour pendant 30 jours.
+========================================================= */
+const EXT = { supported: (typeof window.showDirectoryPicker==='function'), handle:null, name:'', perm:'none', last: null, error:'', busy:false, dirty:false, firstDirty:0, timer:null };
+const EXT_FILE_RE = /^trnaja_(\d{4}-\d{2}-\d{2})_(\d{2})h(\d{2})\.json$/;
+function extIdb(){ return new Promise((res,rej)=>{ const r=indexedDB.open('trnaja_ext_backup',1); r.onupgradeneeded=()=>r.result.createObjectStore('h'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function extIdbGet(){ try{ const db=await extIdb(); return await new Promise(res=>{ const q=db.transaction('h').objectStore('h').get('dir'); q.onsuccess=()=>res(q.result||null); q.onerror=()=>res(null); }); }catch(e){ return null; } }
+async function extIdbSet(h){ try{ const db=await extIdb(); await new Promise((res,rej)=>{ const tx=db.transaction('h','readwrite'); if(h) tx.objectStore('h').put(h,'dir'); else tx.objectStore('h').delete('dir'); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){ console.warn(e); } }
+async function extCheckPerm(request){
+  if(!EXT.handle){ EXT.perm='none'; return 'none'; }
+  try{
+    let p = await EXT.handle.queryPermission({mode:'readwrite'});
+    if(p!=='granted' && request){ p = await EXT.handle.requestPermission({mode:'readwrite'}); }
+    EXT.perm = p;
+  }catch(e){ EXT.perm='denied'; }
+  return EXT.perm;
+}
+async function extInit(){
+  try{ EXT.last = localStorage.getItem('trnaja_ext_last') || null; }catch(e){}
+  if(!EXT.supported){ updateExtBadge(); return; }
+  EXT.handle = await extIdbGet();
+  if(EXT.handle){ EXT.name = EXT.handle.name; await extCheckPerm(false); }
+  updateExtBadge();
+  setInterval(updateExtBadge, 60000);
+  // Après un redémarrage, le navigateur demande de réautoriser : au premier clic de l'utilisateur
+  document.addEventListener('pointerdown', async function once(){
+    if(EXT.handle && EXT.perm!=='granted'){
+      const p = await extCheckPerm(true);
+      if(p==='granted'){ extFlush(true); }
+      updateExtBadge();
+    }
+    document.removeEventListener('pointerdown', once);
+  }, true);
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && EXT.dirty) extFlush(false); });
+  if(EXT.handle && EXT.perm==='granted'){ extFlush(true); } // une copie à chaque ouverture
+}
+function extMarkDirty(){
+  if(!EXT.handle || EXT.perm!=='granted') return;
+  EXT.dirty = true;
+  if(!EXT.firstDirty) EXT.firstDirty = Date.now();
+  clearTimeout(EXT.timer);
+  const wait = Math.min(45000, Math.max(1000, 600000 - (Date.now()-EXT.firstDirty)));
+  EXT.timer = setTimeout(()=>extFlush(false), wait);
+}
+async function extWriteFile(name, text){
+  const fh = await EXT.handle.getFileHandle(name, {create:true});
+  const w = await fh.createWritable(); await w.write(text); await w.close();
+}
+async function extPrune(){
+  const files = [];
+  for await (const [name] of EXT.handle.entries()){ const m = EXT_FILE_RE.exec(name); if(m) files.push({name, date:m[1]}); }
+  files.sort((a,b)=>a.name<b.name?1:-1); // plus récent d'abord
+  const today = todayStr(), seenDay = {}, del = [];
+  const limit = new Date(Date.now()-30*864e5).toISOString().slice(0,10);
+  let todayCount = 0;
+  for(const f of files){
+    if(f.date < limit){ del.push(f.name); continue; }
+    if(f.date === today){ todayCount++; if(todayCount>20) del.push(f.name); continue; }
+    if(seenDay[f.date]) del.push(f.name); else seenDay[f.date] = true;
+  }
+  for(const n of del){ try{ await EXT.handle.removeEntry(n); }catch(e){} }
+}
+async function extFlush(force){
+  if(!EXT.handle || EXT.busy) return false;
+  if(!force && !EXT.dirty) return false;
+  const p = await extCheckPerm(false);
+  if(p!=='granted'){ EXT.error = 'Autorisation à renouveler'; updateExtBadge(); return false; }
+  EXT.busy = true;
+  try{
+    const d = new Date(), z = n=>String(n).padStart(2,'0');
+    const json = JSON.stringify(DB);
+    const wasDirty = EXT.dirty; EXT.dirty = false; EXT.firstDirty = 0;
+    await extWriteFile('trnaja_DERNIERE.json', json);
+    await extWriteFile(`trnaja_${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}_${z(d.getHours())}h${z(d.getMinutes())}.json`, json);
+    await extPrune();
+    EXT.last = new Date().toISOString(); EXT.error = '';
+    try{ localStorage.setItem('trnaja_ext_last', EXT.last); }catch(e){}
+  }catch(e){
+    EXT.dirty = true; EXT.error = String(e && e.message || e);
+    console.warn('Sauvegarde externe impossible :', e);
+  }
+  EXT.busy = false; updateExtBadge();
+  return !EXT.error;
+}
+async function extChooseFolder(){
+  if(!EXT.supported){ toast('Ce navigateur ne permet pas le choix du dossier. Utilisez Chrome ou Edge.', 'err'); return; }
+  try{
+    const h = await window.showDirectoryPicker({ id:'trnaja-backup', mode:'readwrite' });
+    EXT.handle = h; EXT.name = h.name;
+    await extIdbSet(h);
+    await extCheckPerm(true);
+    const ok = await extFlush(true);
+    toast(ok ? '✅ Sauvegarde automatique activée dans le dossier « '+h.name+' ».' : 'Dossier choisi, mais l’écriture a échoué : '+EXT.error, ok?undefined:'err');
+  }catch(e){
+    if(e && e.name!=='AbortError') toast('Dossier refusé par le navigateur. Choisissez un sous-dossier (ex : Sauvegardes_TRNaja) et pas Documents/Bureau/Téléchargements directement.', 'err');
+  }
+  updateExtBadge(); if(SETTINGS_TAB==='backup' && document.getElementById('settingsBody')) renderSettingsBody();
+}
+async function extDisable(){
+  confirmAction('Arrêter la sauvegarde automatique vers ce dossier ? (Les fichiers déjà enregistrés restent dans le dossier.)', async ()=>{
+    EXT.handle = null; EXT.name=''; EXT.perm='none'; await extIdbSet(null); updateExtBadge(); renderSettingsBody();
+  }, 'Arrêter', true);
+}
+async function extBackupNow(){
+  if(!EXT.handle){ toast('Choisissez d’abord un dossier de sauvegarde.', 'err'); return; }
+  if(await extCheckPerm(true)!=='granted'){ toast('Autorisation refusée.', 'err'); updateExtBadge(); return; }
+  const ok = await extFlush(true);
+  toast(ok ? '✅ Sauvegarde enregistrée.' : 'Échec : '+EXT.error, ok?undefined:'err');
+  if(SETTINGS_TAB==='backup') renderSettingsBody();
+}
+function extAgo(iso){
+  if(!iso) return 'jamais';
+  const m = Math.round((Date.now()-new Date(iso).getTime())/60000);
+  if(m<1) return 'à l’instant'; if(m<60) return 'il y a '+m+' min';
+  const h = Math.round(m/60); if(h<48) return 'il y a '+h+' h'; return 'il y a '+Math.round(h/24)+' jours';
+}
+function updateExtBadge(){
+  const el = document.getElementById('extPill'); if(!el) return;
+  let cls='warn', txt='';
+  if(!EXT.supported){ el.style.display='none'; return; }
+  el.style.display='';
+  if(!EXT.handle){ cls='bad'; txt='⚠️ Pas de sauvegarde externe — configurer'; }
+  else if(EXT.perm!=='granted'){ cls='warn'; txt='🔒 Cliquez pour réactiver la sauvegarde'; }
+  else {
+    const old = EXT.last && (Date.now()-new Date(EXT.last).getTime() > 24*3600*1000);
+    cls = (!EXT.last || old) ? 'warn' : 'ok';
+    txt = '💾 Sauvegardé ' + extAgo(EXT.last) + (EXT.error?' (erreur)':'');
+  }
+  el.className = 'ext-pill ' + cls; el.textContent = txt;
+}
+async function extPillClick(){
+  if(EXT.handle && EXT.perm!=='granted'){ await extCheckPerm(true); if(EXT.perm==='granted') await extFlush(true); updateExtBadge(); return; }
+  SETTINGS_TAB='backup'; navigate('settings');
+}
+function renderExtBackupCard(){
+  const state = !EXT.supported
+    ? `<div class="alert" style="background:#fff4e5;border:1px solid #f5b041;padding:10px;border-radius:8px;">Ce navigateur ne peut pas écrire dans un dossier. Ouvrez le logiciel avec <b>Google Chrome</b> ou <b>Microsoft Edge</b> pour activer la sauvegarde automatique hors de l’ordinateur. En attendant, le logiciel télécharge un fichier de sauvegarde automatiquement (voir plus bas).</div>`
+    : !EXT.handle
+    ? `<div class="alert" style="background:#fdecea;border:1px solid #e57373;padding:10px;border-radius:8px;">⚠️ <b>Aucun dossier de sauvegarde choisi.</b> Si l’ordinateur tombe en panne, vous pouvez tout perdre. Choisissez un dossier maintenant (une seule fois).</div>
+       <button class="btn btn-primary btn-block" style="margin-top:10px;" onclick="extChooseFolder()">📁 Choisir le dossier de sauvegarde</button>`
+    : `<p style="margin:0 0 6px;">Dossier : <b>${escapeHtml(EXT.name)}</b><br>Dernière sauvegarde : <b>${extAgo(EXT.last)}</b> ${EXT.perm!=='granted'?'<br><b style="color:#c0392b">🔒 Autorisation à renouveler (cliquez sur le bouton ci-dessous)</b>':''} ${EXT.error?'<br><span style="color:#c0392b">Erreur : '+escapeHtml(EXT.error)+'</span>':''}</p>
+       <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary" onclick="extBackupNow()">💾 Sauvegarder maintenant</button>
+       <button class="btn btn-ghost" onclick="extChooseFolder()">Changer de dossier</button>
+       <button class="btn btn-ghost" onclick="extDisable()">Arrêter</button></div>
+       <div id="extList" style="margin-top:12px;"></div>`;
+  return `<div class="card" style="max-width:640px;border:2px solid var(--green-400);">
+    <div class="card-head"><h3>🛡️ Sauvegarde automatique hors de l’ordinateur</h3></div>
+    <p class="small-note">Le logiciel enregistre <b>tout seul</b> une copie de toutes vos données (produits, stocks, ventes, dettes, fournisseurs, historiques) dans un dossier de votre choix, quelques secondes après chaque modification. Choisissez une <b>clé USB</b>, un <b>disque réseau</b> ou un dossier <b>Google Drive / OneDrive</b> : ainsi, même si l’ordinateur tombe en panne, vos données sont ailleurs. Créez un dossier dédié (ex : <i>Sauvegardes_TRNaja</i>).</p>
+    ${state}
+  </div>`;
+}
+async function extRenderList(){
+  const box = document.getElementById('extList'); if(!box || !EXT.handle) return;
+  if(EXT.perm!=='granted'){ box.innerHTML=''; return; }
+  const rows = [];
+  try{ for await (const [name,h] of EXT.handle.entries()){ const m = EXT_FILE_RE.exec(name); if(m){ rows.push({name, label:`${m[1].split('-').reverse().join('/')} à ${m[2]}h${m[3]}`}); } } }catch(e){}
+  rows.sort((a,b)=>a.name<b.name?1:-1);
+  box.innerHTML = rows.length ? `<h4 style="margin:6px 0;">Restaurer depuis le dossier</h4><div class="table-wrap" style="max-height:220px;overflow:auto;"><table><tbody>${rows.slice(0,40).map(r=>`<tr><td>${r.label}</td><td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="restoreFromFolderFile('${r.name}')">Restaurer</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="small-note">Aucun fichier dans le dossier pour l’instant.</p>';
+}
+async function restoreFromFolderFile(name){
+  try{
+    const fh = await EXT.handle.getFileHandle(name); const f = await fh.getFile();
+    restoreFromText(await f.text(), 'sauvegarde du dossier ('+name+')');
+  }catch(e){ toast('Lecture impossible : '+(e.message||e), 'err'); }
+}
+/* Restauration complète : remplace TOUT par le contenu de la sauvegarde (après avoir gardé une copie de l'état actuel) */
+function restoreFromText(text, label){
+  let data;
+  try{ data = JSON.parse(text); }catch(e){ toast('Fichier illisible.', 'err'); return; }
+  restoreFromData(data, label);
+}
+function restoreFromData(data, label){
+  if(!data || !Array.isArray(data.users) || !Array.isArray(data.products) || !data.settings){ toast('Fichier invalide : ce n’est pas une sauvegarde TR Naja.', 'err'); return; }
+  const nb = `${data.products.length} produits, ${(data.sales||[]).length} ventes, ${(data.credits||[]).length} dettes`;
+  confirmAction(`Remplacer TOUTES les données actuelles par la ${label||'sauvegarde'} ? (${nb}). Une copie de sécurité de l’état actuel est gardée automatiquement.`, ()=>{
+    try{ localStorage.setItem('trnaja_avant_restauration', JSON.stringify(DB)); }catch(e){}
+    data.settings._syncStamp = nowISO();   // la restauration doit gagner sur le serveur
+    DB = data; migrateDB(); saveDB();
+    toast('Données restaurées.');
+    const done = ()=>setTimeout(()=>location.reload(), 500);
+    if(SYNC.enabled && SYNC.url){ clearTimeout(SYNC_PUSH_DEBOUNCE); pbPush().then(done, done); } else done();
+  }, 'Restaurer', true);
 }
 
 /* =========================================================
@@ -2976,7 +3170,7 @@ function renderSettingsBody(){
     </div>`;
   } else if(SETTINGS_TAB==='backup'){
     const snaps = listSnapshots();
-    body.innerHTML = `<div class="card" style="max-width:560px;border:2px solid var(--green-400);">
+    body.innerHTML = renderExtBackupCard() + `<div class="card" style="max-width:560px;margin-top:18px;border:2px solid var(--green-400);">
       <div class="card-head"><h3>📄 Rapport lisible du jour (PDF)</h3></div>
       <p class="small-note">C'est le document fait pour être <b>lu et compris facilement</b> : ventes du jour, stock à surveiller, crédits clients, caisse. À imprimer ou garder en PDF.</p>
       <button class="btn btn-primary btn-block" onclick="generateDailyReportPDF()">🖨️ Générer le rapport du jour (PDF)</button>
@@ -3007,6 +3201,7 @@ function renderSettingsBody(){
       <input type="file" id="restoreFile" accept=".json">
       <button class="btn btn-danger" style="margin-top:10px;" onclick="restoreBackup()">Restaurer à partir du fichier</button>
     </div>`;
+    setTimeout(extRenderList,0);
   } else if(SETTINGS_TAB==='sync'){
     body.innerHTML = renderSyncSettings();
     setTimeout(()=>{ updateSyncBadge(); uiDetectIp(); }, 0);
@@ -3023,7 +3218,7 @@ function restoreSnapshot(dateStr){
     try{
       const raw = localStorage.getItem(SNAPSHOT_PREFIX + dateStr);
       if(!raw){ toast('Point de restauration introuvable.', 'err'); return; }
-      DB = JSON.parse(raw);
+      DB = JSON.parse(raw); DB.settings._syncStamp = nowISO();
       saveDB();
       toast('Données restaurées au ' + fmtDateOnly(dateStr+'T00:00:00') + '.');
       location.reload();
@@ -3146,15 +3341,7 @@ function restoreBackup(){
   const f = document.getElementById('restoreFile').files[0];
   if(!f){ toast('Choisissez un fichier de sauvegarde.', 'err'); return; }
   const reader = new FileReader();
-  reader.onload = (e)=>{
-    try{
-      const data = JSON.parse(e.target.result);
-      if(!data.users || !data.products){ toast('Fichier invalide.', 'err'); return; }
-      confirmAction('Cette action va remplacer TOUTES les données actuelles par celles du fichier. Continuer ?', ()=>{
-        DB = data; saveDB(); toast('Données restaurées.'); location.reload();
-      }, 'Restaurer', true);
-    }catch(err){ toast('Fichier illisible.', 'err'); }
-  };
+  reader.onload = (e)=> restoreFromText(e.target.result, 'sauvegarde du fichier « '+f.name+' »');
   reader.readAsText(f);
 }
 
@@ -3633,6 +3820,7 @@ async function pbPull(silent){
       if(typeof refresh==='function' && SESSION.user) refresh();
       updateSyncBadge();
     }
+    else if(remoteStamp < dbTimestamp()){ scheduleSyncPush(); } // modifications locales pas encore envoyées (ex : restauration)
     SYNC.lastPull = nowISO();
   }catch(e){
     SYNC.online = false; SYNC.lastError = String(e.message||e);
@@ -3908,6 +4096,7 @@ loadSyncConfig();
 })();
 if(SYNC.enabled) startSyncLoop();
 tryRestoreSession();
+extInit();
 
 </script>
 </body>

@@ -376,7 +376,11 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
    format de papier choisi dans la fenêtre d'impression, ou réglé par défaut dans les
    propriétés de l'imprimante, qui s'applique. On ne force que la hauteur à s'arrêter pile à
    la fin du contenu, pour ne jamais gaspiller de papier, quelle que soit la largeur du rouleau. */
-@page { margin: 10mm; }
+@page { margin: 0; }
+.a4-wrap{width:100%;border-collapse:collapse;border:0;}
+.a4-wrap > thead > tr > td, .a4-wrap > tfoot > tr > td{padding:0;border:0;}
+.a4-sp{height:12mm;}
+.a4-wrap > tbody > tr > td.a4-body{padding:0 12mm;border:0;vertical-align:top;}
 @page receipt-page { size: 80mm 200mm; margin: 0; } /* hauteur réelle ajustée au contenu par printSaleDoc() */
 #printArea.is-receipt { page: receipt-page; }
 
@@ -659,6 +663,7 @@ function migrateDB(){
   if(!DB.emptyBottles) DB.emptyBottles = {};
   (DB.stocks||[]).forEach(s=>{ if(s.address===undefined) s.address=''; if(s.active===undefined) s.active=true; });
   (DB.credits||[]).forEach(cr=>{ if(!Array.isArray(cr.payments)) cr.payments = []; if(cr.remaining===undefined) cr.remaining = (cr.total||0)-(cr.paid||0); });
+  migrateCredits();
   (DB.users||[]).forEach(u=>{ if(u.email===undefined) u.email=''; if(!u.permissions) u.permissions={}; });
 }
 
@@ -704,6 +709,7 @@ const AUTO_BACKUP_INTERVAL_MS = 6*60*60*1000; // toutes les 6 heures d'utilisati
 function maybeRunAutoBackup(){
   saveDailySnapshot();
   if(DB.settings.autoBackupEnabled === false) return;
+  if(typeof EXT!=='undefined' && EXT.handle && EXT.perm==='granted') return; // la sauvegarde externe automatique s'en charge
   const last = DB.settings.lastAutoBackup ? new Date(DB.settings.lastAutoBackup).getTime() : 0;
   if(Date.now() - last < AUTO_BACKUP_INTERVAL_MS) return; // encore récente, pas besoin
   try{
@@ -2141,8 +2147,8 @@ function finalizeSale(isCredit, after){
   DB.sales.unshift(sale);
 
   if(isCredit && total-paid>0){
-    DB.credits.unshift({ id: uid('cr'), clientName: sale.clientName, phone:'', date: nowISO(), total: total, paid: paid, remaining: total-paid, payments: paid>0?[{date:nowISO(), amount:paid, user:SESSION.user.username}]:[], notes:'Vente '+sale.number, saleId: sale.id });
-    addNotification('credit', `Vente à crédit ${sale.number} — ${sale.clientName} doit ${fmtAr(total-paid)}.`);
+    const crAcc = addCreditPurchase(sale.clientName, sale, total, paid);
+    addNotification('credit', `Vente à crédit ${sale.number} — ${sale.clientName} : +${fmtAr(total-paid)} (dette totale ${fmtAr(crAcc.remaining)}).`);
   }
 
   addNotification('sale', `Nouvelle vente ${sale.number} — ${sale.clientName} — ${fmtAr(total)}`);
@@ -2237,7 +2243,7 @@ function resetReceiptPageHeight(){ const st = document.getElementById('receiptPa
    à la fois une imprimante et "Enregistrer au format PDF" (téléchargement). */
 function printSaleDoc(sale, fmt, mode){
   const area = document.getElementById('printArea');
-  area.innerHTML = saleDocHtml(sale, fmt);
+  area.innerHTML = fmt==='invoice' ? wrapA4(saleDocHtml(sale, fmt)) : saleDocHtml(sale, fmt);
   area.className = fmt==='invoice' ? '' : 'is-receipt'; // format papier étroit uniquement pour le petit ticket
   if(fmt==='invoice') resetReceiptPageHeight(); else fitReceiptPageHeight(area);
   const oldTitle = document.title;
@@ -2358,7 +2364,14 @@ function cancelSale(saleId){
       }
     }
   });
-  if(sale.isCredit){ const cr = DB.credits.find(x=>x.saleId===sale.id); if(cr){ cr.remaining = 0; cr.notes += ' (vente annulée)'; } }
+  if(sale.isCredit){
+    const cr = DB.credits.find(x=>(x.purchases||[]).some(p=>p.saleId===sale.id));
+    if(cr){
+      const pu = cr.purchases.find(p=>p.saleId===sale.id); pu.cancelled = true;
+      cr.payments = cr.payments.filter(p=>p.saleId!==sale.id); // le paiement fait lors de cette vente tombe avec la vente
+      recalcCredit(cr); cr.notes = (cr.notes||'') + ' (vente '+sale.number+' annulée)';
+    }
+  }
   addNotification('cancel', `Vente ${sale.number} annulée par ${SESSION.user.username} — motif: ${reason}`);
   logHistory('Vente annulée', `Facture ${sale.number} — motif: ${reason}`);
   saveDB(); closeModal(); refresh();
@@ -2773,24 +2786,77 @@ function saveExpense(){
 /* =========================================================
    CRÉDITS CLIENTS
 ========================================================= */
+function normClient(n){ return String(n||'').trim().toLowerCase().replace(/\s+/g,' '); }
+/* Une seule fiche de dette par client : les nouveaux achats à crédit s'ajoutent à la dette existante. */
+function findCreditAccount(clientName){
+  const k = normClient(clientName); if(!k) return null;
+  return DB.credits.find(x=>normClient(x.clientName)===k) || null;
+}
+function recalcCredit(cr){
+  cr.purchases = cr.purchases || [];
+  cr.total = cr.purchases.filter(p=>!p.cancelled).reduce((a,p)=>a+(p.amount||0),0);
+  cr.paid = (cr.payments||[]).reduce((a,p)=>a+(p.amount||0),0);
+  cr.remaining = Math.max(0, cr.total - cr.paid);
+}
+function addCreditPurchase(clientName, sale, total, paid){
+  const user = SESSION.user ? SESSION.user.username : '';
+  let cr = findCreditAccount(clientName);
+  const pur = { id: uid('pu'), date: sale.date, saleId: sale.id, number: sale.number, amount: total, note:'' };
+  const pay = paid>0 ? { date: sale.date, amount: paid, user, saleId: sale.id } : null;
+  if(cr){
+    cr.purchases.push(pur); if(pay) cr.payments.push(pay);
+    cr.lastDate = sale.date; recalcCredit(cr);
+    return cr;
+  }
+  cr = { id: uid('cr'), clientName: String(clientName).trim(), phone:'', date: sale.date, lastDate: sale.date, total:0, paid:0, remaining:0,
+         payments: pay?[pay]:[], purchases:[pur], notes:'', saleId: sale.id };
+  recalcCredit(cr);
+  DB.credits.unshift(cr);
+  return cr;
+}
+/* Anciennes données : une fiche par vente → on regroupe par client (rien n'est perdu : achats et paiements sont conservés) */
+function migrateCredits(){
+  const byName = {}, out = [];
+  (DB.credits||[]).forEach(cr=>{
+    if(!Array.isArray(cr.payments)) cr.payments = [];
+    if(!Array.isArray(cr.purchases)){
+      const sale = byId(DB.sales, cr.saleId);
+      if(cr.payments.length && sale && sale.paid>0 && !cr.payments[0].saleId) cr.payments[0].saleId = sale.id; // 1er paiement = celui de la vente
+      cr.purchases = [{ id: uid('pu'), date: cr.date, saleId: cr.saleId||'', number: sale?sale.number:'', amount: cr.total||0, note: sale?'':(cr.notes||'Ancienne dette') }];
+    }
+    const k = normClient(cr.clientName);
+    if(!k || !byName[k]){ if(k) byName[k]=cr; out.push(cr); return; }
+    const main = byName[k];
+    main.purchases = main.purchases.concat(cr.purchases).sort((a,b)=>String(a.date)<String(b.date)?-1:1);
+    main.payments = main.payments.concat(cr.payments).sort((a,b)=>String(a.date)<String(b.date)?-1:1);
+    if(!main.phone && cr.phone) main.phone = cr.phone;
+    if(String(cr.date) < String(main.date)) main.date = cr.date;
+    main.total = (main.total||0)+(cr.total||0); main.paid=(main.paid||0)+(cr.paid||0); main.remaining=(main.remaining||0)+(cr.remaining||0);
+  });
+  DB.credits = out;
+  DB.credits.forEach(cr=>{ if(!cr.lastDate){ const d = cr.purchases.map(p=>p.date).sort().pop(); cr.lastDate = d || cr.date; } });
+}
 function render_credits(c){
-  const list = DB.credits;
+  const list = DB.credits.slice().sort((a,b)=> (b.remaining>0)-(a.remaining>0) || String(b.lastDate||b.date).localeCompare(String(a.lastDate||a.date)));
   c.innerHTML = `
     <div class="grid grid-3">
       <div class="kpi"><div class="lbl">Total en cours</div><div class="val">${fmtAr(list.reduce((a,x)=>a+x.remaining,0))}</div></div>
-      <div class="kpi"><div class="lbl">Clients débiteurs</div><div class="val">${new Set(list.filter(x=>x.remaining>0).map(x=>x.clientName)).size}</div></div>
-      <div class="kpi"><div class="lbl">Créances soldées</div><div class="val">${list.filter(x=>x.remaining<=0).length}</div></div>
+      <div class="kpi"><div class="lbl">Clients débiteurs</div><div class="val">${list.filter(x=>x.remaining>0).length}</div></div>
+      <div class="kpi"><div class="lbl">Clients soldés</div><div class="val">${list.filter(x=>x.remaining<=0).length}</div></div>
     </div>
     <div class="toolbar" style="margin-top:14px;"><div class="spacer"></div><button class="btn btn-ghost" onclick="exportCredits()">📤 Exporter Excel</button></div>
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Client</th><th>Téléphone</th><th>Date</th><th>Total</th><th>Payé</th><th>Reste</th><th></th></tr></thead>
+      <thead><tr><th>Client</th><th>Téléphone</th><th>Dernier achat</th><th>Achats</th><th>Total</th><th>Payé</th><th>Reste</th><th></th></tr></thead>
       <tbody>${list.length? list.map(cr=>`<tr>
-        <td>${escapeHtml(cr.clientName)}</td><td>${escapeHtml(cr.phone||'—')}</td><td>${fmtDateOnly(cr.date)}</td>
+        <td><b>${escapeHtml(cr.clientName)}</b></td><td>${escapeHtml(cr.phone||'—')}</td><td>${fmtDateOnly(cr.lastDate||cr.date)}</td>
+        <td>${(cr.purchases||[]).filter(p=>!p.cancelled).length}</td>
         <td>${fmtAr(cr.total)}</td><td>${fmtAr(cr.paid)}</td>
         <td style="font-weight:700;color:${cr.remaining>0?'var(--red)':'var(--green-700)'}">${fmtAr(cr.remaining)}</td>
-        <td>${cr.remaining>0? `<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${cr.id}')">+ Paiement</button>` : '<span class="badge badge-green">Soldé</span>'}
-        <button class="btn btn-icon btn-sm" onclick="showCreditHistory('${cr.id}')">👁️</button></td>
-      </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state">Aucun crédit client enregistré.</div></td></tr>`}</tbody>
+        <td style="white-space:nowrap;">${cr.remaining>0? `<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${cr.id}')">+ Paiement</button>` : '<span class="badge badge-green">Soldé</span>'}
+        <button class="btn btn-ghost btn-sm" title="Ajouter un montant à la dette de ce client" onclick="openAddDebtModal('${cr.id}')">➕ Dette</button>
+        <button class="btn btn-ghost btn-sm" title="Facture / relevé des achats à crédit" onclick="printCreditInvoice('${cr.id}')">🧾 Facture</button>
+        <button class="btn btn-icon btn-sm" title="Détail" onclick="showCreditHistory('${cr.id}')">👁️</button></td>
+      </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state">Aucun crédit client enregistré.</div></td></tr>`}</tbody>
     </table></div></div>
   `;
 }
@@ -2806,19 +2872,90 @@ function savePayment(id){
   const amt = parseFloat(document.getElementById('payAmount').value);
   if(!amt || amt<=0){ toast('Montant invalide.', 'err'); return; }
   const applied = Math.min(amt, cr.remaining);
-  cr.paid += applied; cr.remaining -= applied;
   cr.payments.push({ date: nowISO(), amount: applied, user: SESSION.user.username });
+  recalcCredit(cr);
   addNotification('credit', `Paiement reçu de ${cr.clientName} — ${fmtAr(applied)} (reste ${fmtAr(cr.remaining)}).`);
   logHistory('Paiement crédit', `${cr.clientName} — ${fmtAr(applied)}`);
   saveDB(); closeModal(); refresh(); toast('Paiement enregistré. Reste : ' + fmtAr(cr.remaining));
 }
+/* Ajouter un montant à une dette existante (sans nouvelle fiche, sans toucher au stock) */
+function openAddDebtModal(id){
+  const cr = byId(DB.credits, id);
+  openModal({ title:'Ajouter à la dette — ' + cr.clientName, bodyHtml:`
+    <p class="small-note">Dette actuelle : <b>${fmtAr(cr.remaining)}</b>. Le montant ajouté s'ajoute à la dette de ce client, sur la même fiche.</p>
+    <div class="field"><label>Montant à ajouter (Ar)</label><input type="number" id="debtAmount" min="1"></div>
+    <div class="field"><label>Motif / détail (facultatif)</label><input type="text" id="debtNote" placeholder="ex : marchandise prise le 12"></div>
+  `, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveAddDebt('${id}')">Ajouter</button>` });
+}
+function saveAddDebt(id){
+  const cr = byId(DB.credits,id);
+  const amt = parseFloat(document.getElementById('debtAmount').value);
+  if(!amt || amt<=0){ toast('Montant invalide.', 'err'); return; }
+  const note = document.getElementById('debtNote').value.trim();
+  cr.purchases.push({ id: uid('pu'), date: nowISO(), saleId:'', number:'', amount: amt, note: note || 'Montant ajouté' });
+  cr.lastDate = nowISO(); recalcCredit(cr);
+  addNotification('credit', `${cr.clientName} : +${fmtAr(amt)} ajouté à la dette (total ${fmtAr(cr.remaining)}).`);
+  logHistory('Dette augmentée', `${cr.clientName} — +${fmtAr(amt)}`);
+  saveDB(); closeModal(); refresh(); toast('Dette mise à jour : ' + fmtAr(cr.remaining));
+}
 function showCreditHistory(id){
   const cr = byId(DB.credits,id);
-  openModal({ title:'Historique — ' + cr.clientName, bodyHtml:`
-    <p>Total: ${fmtAr(cr.total)} — Payé: ${fmtAr(cr.paid)} — Reste: ${fmtAr(cr.remaining)}</p>
+  const purchases = (cr.purchases||[]).slice().sort((a,b)=>String(a.date)<String(b.date)?-1:1);
+  openModal({ title:'Détail — ' + cr.clientName, large:true, bodyHtml:`
+    <p><b>Total des achats à crédit :</b> ${fmtAr(cr.total)} — <b>Payé :</b> ${fmtAr(cr.paid)} — <b>Reste :</b> <span style="color:var(--red);font-weight:700;">${fmtAr(cr.remaining)}</span></p>
+    <h4>Achats à crédit</h4>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Vente n°</th><th>Détail</th><th style="text-align:right;">Montant</th></tr></thead>
+    <tbody>${purchases.length? purchases.map(p=>{ const s = p.saleId? byId(DB.sales,p.saleId):null;
+      const det = s ? s.items.map(i=>escapeHtml(i.name)+' ×'+fmtNum(i.qty)).join(', ') : escapeHtml(p.note||'');
+      return `<tr style="${p.cancelled?'opacity:.5;text-decoration:line-through;':''}"><td>${fmtDate(p.date)}</td><td>${escapeHtml(p.number||'—')}</td><td>${det}${p.cancelled?' (annulé)':''}</td><td style="text-align:right;">${fmtAr(p.amount)}</td></tr>`;}).join('') : `<tr><td colspan="4">Aucun achat.</td></tr>`}</tbody></table></div>
+    <h4>Règlements</h4>
     <div class="table-wrap"><table><thead><tr><th>Date</th><th>Montant</th><th>Par</th></tr></thead>
     <tbody>${cr.payments.length? cr.payments.map(p=>`<tr><td>${fmtDate(p.date)}</td><td>${fmtAr(p.amount)}</td><td>${escapeHtml(p.user)}</td></tr>`).join('') : `<tr><td colspan="3">Aucun règlement.</td></tr>`}</tbody></table></div>
-  `, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>` });
+  `, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="printCreditInvoice('${cr.id}')">🧾 Facture / relevé</button>` });
+}
+/* Facture des achats à crédit d'un client (A4) : achats, règlements, reste à payer */
+function creditInvoiceHtml(cr){
+  const shop = escapeHtml(DB.settings.shopName||'TR Naja');
+  const purchases = (cr.purchases||[]).filter(p=>!p.cancelled).slice().sort((a,b)=>String(a.date)<String(b.date)?-1:1);
+  let rows = '';
+  purchases.forEach(p=>{
+    const s = p.saleId? byId(DB.sales,p.saleId):null;
+    if(s && s.items && s.items.length){
+      s.items.forEach((it,i)=>{ rows += `<tr><td>${i===0?fmtDateOnly(p.date):''}</td><td>${i===0?escapeHtml(p.number||''):''}</td><td>${escapeHtml(it.name)} (${escapeHtml(it.unitName)})</td><td style="text-align:right;">${fmtNum(it.qty)}</td><td style="text-align:right;">${fmtAr(it.unitPrice)}</td><td style="text-align:right;">${fmtAr(it.qty*it.unitPrice)}</td></tr>`; });
+    } else {
+      rows += `<tr><td>${fmtDateOnly(p.date)}</td><td>${escapeHtml(p.number||'')}</td><td colspan="3">${escapeHtml(p.note||'Montant ajouté à la dette')}</td><td style="text-align:right;">${fmtAr(p.amount)}</td></tr>`;
+    }
+  });
+  const pays = (cr.payments||[]).slice().sort((a,b)=>String(a.date)<String(b.date)?-1:1);
+  return `<div class="pdf-doc">
+    <div class="pdf-head"><img src="${LOGO_B64}" alt="logo"><div><h1>${shop}</h1><div class="pdf-sub">Vente en gros et en détail</div></div>
+      <div style="margin-left:auto;text-align:right;"><div style="font-size:20px;font-weight:800;color:#0f5233;">FACTURE — ACHATS À CRÉDIT</div><div style="font-size:12px;">Établie le ${fmtDateOnly(nowISO())}</div></div></div>
+    <p style="font-size:13px;"><b>Client :</b> ${escapeHtml(cr.clientName)}${cr.phone?' — Tél : '+escapeHtml(cr.phone):''}</p>
+    <table><thead><tr><th>Date</th><th>Vente n°</th><th>Désignation</th><th style="text-align:right;">Qté</th><th style="text-align:right;">Prix unitaire</th><th style="text-align:right;">Montant</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="6">Aucun achat.</td></tr>'}</tbody></table>
+    ${pays.length? `<h2>Règlements reçus</h2><table style="width:60%;"><thead><tr><th>Date</th><th style="text-align:right;">Montant</th></tr></thead><tbody>${pays.map(p=>`<tr><td>${fmtDateOnly(p.date)}</td><td style="text-align:right;">${fmtAr(p.amount)}</td></tr>`).join('')}</tbody></table>`:''}
+    <table style="width:55%;margin-left:auto;">
+      <tr><td><b>Total des achats à crédit</b></td><td style="text-align:right;"><b>${fmtAr(cr.total)}</b></td></tr>
+      <tr><td>Total payé</td><td style="text-align:right;">${fmtAr(cr.paid)}</td></tr>
+      <tr><td><b>RESTE À PAYER</b></td><td style="text-align:right;"><b style="color:#b00020;">${fmtAr(cr.remaining)}</b></td></tr>
+    </table>
+    <p style="text-align:center;margin-top:20px;font-size:12px;">Merci de votre confiance — ${shop}</p>
+  </div>`;
+}
+function printCreditInvoice(id){
+  const cr = byId(DB.credits, id); if(!cr) return;
+  closeModal();
+  const area = document.getElementById('printArea');
+  area.className = ''; resetReceiptPageHeight();
+  area.innerHTML = wrapA4(creditInvoiceHtml(cr));
+  const old = document.title; document.title = 'Facture_credit_' + cr.clientName.replace(/[^\w]+/g,'_');
+  const restore = ()=>{ document.title = old; window.removeEventListener('afterprint', restore); };
+  window.addEventListener('afterprint', restore);
+  setTimeout(()=>window.print(), 200);
+}
+/* Enveloppe A4 : marges haut/bas répétées sur chaque page, sans en-tête/pied de page du navigateur (@page margin:0) */
+function wrapA4(inner){
+  return `<table class="a4-wrap"><thead><tr><td><div class="a4-sp"></div></td></tr></thead><tfoot><tr><td><div class="a4-sp"></div></td></tr></tfoot><tbody><tr><td class="a4-body">${inner}</td></tr></tbody></table>`;
 }
 
 /* =========================================================
@@ -2932,9 +3069,7 @@ function computeBilan(startISO, endISO, stockFilter){
   const creditGranted = sales.filter(s=>s.isCredit).reduce((a,s)=>a+Math.max(0,s.total-s.paid),0);
   let settlements=0, settlementsCount=0;
   DB.credits.forEach(cr=>{
-    const sale = byId(DB.sales, cr.saleId);
-    const initial = (sale && sale.paid>0) ? 1 : 0; // le 1er paiement est celui fait lors de la vente
-    (cr.payments||[]).slice(initial).forEach(pm=>{ if(inRange(pm.date)){ settlements+=pm.amount; settlementsCount++; } });
+    (cr.payments||[]).filter(pm=>!pm.saleId).forEach(pm=>{ if(inRange(pm.date)){ settlements+=pm.amount; settlementsCount++; } }); // paiements reçus après la vente
   });
   const mv = DB.stockMovements.filter(m=>inRange(m.date));
   const closures = DB.cashSessions.filter(c=>c.status==='closed' && c.closedAt && inRange(c.closedAt));
@@ -3399,7 +3534,7 @@ function saveMyProfile(){
 function printPDFDoc(title, subtitle, innerHtml){
   const area = document.getElementById('printArea');
   area.className = ''; // page A4 normale (pas le format ticket étroit)
-  area.innerHTML = `<div class="pdf-doc">
+  area.innerHTML = wrapA4(`<div class="pdf-doc">
     <div class="pdf-head">
       <img src="${LOGO_B64}" alt="logo">
       <div><h1>${escapeHtml(title)}</h1><div class="pdf-sub">${escapeHtml(subtitle||'TR Naja — Vente en gros et en détail')}</div></div>
@@ -3407,7 +3542,7 @@ function printPDFDoc(title, subtitle, innerHtml){
     <div class="pdf-meta">Généré le ${fmtDate(nowISO())} par ${escapeHtml(SESSION.user? (SESSION.user.fullName||SESSION.user.username):'')}</div>
     ${innerHtml}
     <div class="pdf-foot">TR Naja — Document généré automatiquement par le logiciel de gestion</div>
-  </div>`;
+  </div>`);
   toast('Dans la fenêtre d\u2019impression, choisissez "Enregistrer au format PDF" comme imprimante.', 'warn');
   setTimeout(()=>{ window.print(); }, 200);
 }

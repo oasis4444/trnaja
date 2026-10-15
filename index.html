@@ -349,6 +349,14 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .receipt .it-name small{font-size:15px;}
 .receipt .it-calc td{padding-bottom:4px;font-size:17px;}
 .receipt .tot td{font-size:24px;}
+.receipt.w58{font-size:14px;max-width:230px;line-height:1.25;}
+.receipt.w58 .shop{font-size:18px;}
+.receipt.w58 table{font-size:14px;}
+.receipt.w58 .it-name small{font-size:12px;}
+.receipt.w58 .it-calc td{font-size:13px;}
+.receipt.w58 .tot td{font-size:18px;}
+.receipt.w58 hr{margin:5px 0;}
+.receipt .amt{text-align:right;white-space:nowrap;padding-left:6px;}
 
 .pdf-doc{font-family:Arial,Helvetica,sans-serif;color:#111;max-width:900px;margin:0 auto;padding:10px;}
 .pdf-doc .pdf-head{display:flex;align-items:center;gap:14px;border-bottom:3px solid #0f5233;padding-bottom:12px;margin-bottom:16px;}
@@ -381,7 +389,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .a4-wrap > thead > tr > td, .a4-wrap > tfoot > tr > td{padding:0;border:0;}
 .a4-sp{height:12mm;}
 .a4-wrap > tbody > tr > td.a4-body{padding:0 12mm;border:0;vertical-align:top;}
-@page receipt-page { size: 80mm 200mm; margin: 0; } /* hauteur réelle ajustée au contenu par printSaleDoc() */
+@page receipt-page { size: 80mm 100mm; margin: 0; } /* hauteur réelle ajustée au contenu par printSaleDoc() */
 #printArea.is-receipt { page: receipt-page; }
 
 @media print{
@@ -392,6 +400,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
   #loginScreen, #appShell, .sidebar, .modal-overlay, .toast-wrap{display:none !important;}
   #printArea{display:block !important;position:static !important;margin:0;padding:0;width:auto;}
   #printArea.is-receipt{width:72mm;margin:0 4mm;padding:2mm 0 0;}
+  #printArea.is-receipt.w58{width:48mm;margin:0 5mm;padding:1mm 0 0;}
   #printArea.is-receipt .receipt{width:100%;max-width:none;box-sizing:border-box;}
   /* Le ticket tient sur une seule page : aucun saut de page à l'intérieur. */
   #printArea.is-receipt, #printArea.is-receipt .receipt{
@@ -2375,30 +2384,32 @@ function finalizeSale(isCredit, after){
   }
 }
 
+function ticketWidth(){ try{ return localStorage.getItem('trnaja_ticketW')==='58' ? '58' : '80'; }catch(e){ return '80'; } }
+function setTicketWidth(w){ try{ localStorage.setItem('trnaja_ticketW', w==='58'?'58':'80'); }catch(e){} }
 function buildReceiptHtml(sale){
   const shop = escapeHtml(DB.settings.shopName||'TR Naja');
   const reste = sale.total - sale.paid;
-  return `<div class="receipt">
-    <div class="center"><img src="${LOGO_B64}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" alt="logo"><br>
-    <span class="shop">${shop}</span></div>
+  const nb = sale.items.reduce((a,it)=>a+it.qty,0);
+  const showClient = sale.clientName && !/^(client|comptoir|passage)/i.test(sale.clientName.trim());
+  return `<div class="receipt w${ticketWidth()}">
+    <div class="center"><span class="shop">${shop}</span></div>
     <hr>
     N° ${escapeHtml(sale.number)}<br>
     ${fmtDate(sale.date)}<br>
-    Caissier : ${escapeHtml(sale.cashierName)}<br>
-    Client : ${escapeHtml(sale.clientName)}
+    Caissier : ${escapeHtml(sale.cashierName)}${showClient? '<br>Client : '+escapeHtml(sale.clientName) : ''}
     <hr>
     <table>
       ${sale.items.map(it=>`<tr class="it-name"><td colspan="2">${escapeHtml(it.name)} <small>(${escapeHtml(it.unitName)})</small></td></tr>
-      <tr class="it-calc"><td>${fmtNum(it.qty)} x ${fmtAr(it.unitPrice)}</td><td style="text-align:right;">${fmtAr(it.qty*it.unitPrice)}</td></tr>`).join('')}
+      <tr class="it-calc"><td style="white-space:nowrap;">${fmtNum(it.qty)} x ${fmtNum(it.unitPrice)}</td><td class="amt">${fmtAr(it.qty*it.unitPrice)}</td></tr>`).join('')}
     </table>
     <hr>
     <table>
-      <tr class="tot"><td>TOTAL</td><td style="text-align:right;">${fmtAr(sale.total)}</td></tr>
-      <tr><td>Payé</td><td style="text-align:right;">${fmtAr(sale.paid)}</td></tr>
-      ${sale.isCredit && reste>0 ? `<tr><td>Reste (crédit)</td><td style="text-align:right;">${fmtAr(reste)}</td></tr>` : `<tr><td>Monnaie</td><td style="text-align:right;">${fmtAr(sale.change)}</td></tr>`}
+      <tr class="tot"><td>TOTAL</td><td class="amt">${fmtAr(sale.total)}</td></tr>
+      <tr><td>Payé</td><td class="amt">${fmtAr(sale.paid)}</td></tr>
+      ${sale.isCredit && reste>0 ? `<tr><td>Reste (crédit)</td><td class="amt">${fmtAr(reste)}</td></tr>` : `<tr><td>Monnaie</td><td class="amt">${fmtAr(sale.change)}</td></tr>`}
     </table>
     <hr>
-    <div class="center">Merci de votre confiance !<br>À bientôt chez ${shop}</div>
+    <div class="center">Merci, à bientôt !</div>
   </div>`;
 }
 
@@ -2441,11 +2452,12 @@ function fitReceiptPageHeight(area){
   let st = document.getElementById('receiptPageDyn');
   if(!st){ st = document.createElement('style'); st.id = 'receiptPageDyn'; document.head.appendChild(st); }
   const keep = area.getAttribute('style');
-  area.style.cssText = 'display:block;position:absolute;visibility:hidden;left:-9999px;top:0;width:72mm;padding:2mm 0 0;';
+  const W = ticketWidth(), cw = W==='58' ? 48 : 72;
+  area.style.cssText = 'display:block;position:absolute;visibility:hidden;left:-9999px;top:0;width:'+cw+'mm;padding:'+(W==='58'?1:2)+'mm 0 0;';
   const px = area.scrollHeight;
   if(keep===null) area.removeAttribute('style'); else area.setAttribute('style', keep);
-  const mm = Math.max(50, Math.ceil(px * 25.4 / 96) + 10); // +10 mm de marge de sécurité avant la coupe
-  st.textContent = '@page receipt-page { size: 80mm ' + mm + 'mm; margin: 0; }';
+  const mm = Math.max(30, Math.ceil(px * 25.4 / 96) + 4); // +4 mm : le papier s'arrête juste après le contenu
+  st.textContent = '@page receipt-page { size: ' + W + 'mm ' + mm + 'mm; margin: 0; }';
 }
 function resetReceiptPageHeight(){ const st = document.getElementById('receiptPageDyn'); if(st) st.textContent=''; }
 
@@ -2454,7 +2466,7 @@ function resetReceiptPageHeight(){ const st = document.getElementById('receiptPa
 function printSaleDoc(sale, fmt, mode){
   const area = document.getElementById('printArea');
   area.innerHTML = fmt==='invoice' ? wrapA4(saleDocHtml(sale, fmt)) : saleDocHtml(sale, fmt);
-  area.className = fmt==='invoice' ? '' : 'is-receipt'; // format papier étroit uniquement pour le petit ticket
+  area.className = fmt==='invoice' ? '' : 'is-receipt w'+ticketWidth(); // format papier étroit uniquement pour le petit ticket
   if(fmt==='invoice') resetReceiptPageHeight(); else fitReceiptPageHeight(area);
   const oldTitle = document.title;
   document.title = (fmt==='invoice'?'Facture_':'Ticket_') + sale.number; // nom de fichier PDF proposé
@@ -2476,6 +2488,7 @@ function showReceiptModal(sale, fmt){
         <button class="${f==='ticket'?'active':''}" onclick="showReceiptModal(byId(DB.sales,'${sale.id}'),'ticket')">🧾 Ticket</button>
         <button class="${f==='invoice'?'active':''}" onclick="showReceiptModal(byId(DB.sales,'${sale.id}'),'invoice')">📄 Facture A4</button>
       </div>
+      ${f==='ticket'?`<div class="pill-row" style="margin-bottom:12px;"><span class="hint" style="margin:0 6px 0 0;">Papier de l'imprimante :</span>${['80','58'].map(w=>`<button class="${ticketWidth()===w?'active':''}" onclick="setTicketWidth('${w}');showReceiptModal(byId(DB.sales,'${sale.id}'),'ticket')">${w} mm</button>`).join('')}</div>`:''}
       <div style="background:#f7f7f7;border-radius:10px;padding:16px 0;">${saleDocHtml(sale, f)}</div>
       <p class="small-note" style="margin-top:12px;">« Imprimer » envoie le document à l'imprimante. « Télécharger » ouvre la même fenêtre : choisissez « Enregistrer au format PDF » comme destination.</p>`,
     footHtml: `<button class="btn btn-ghost" onclick="closeModal()">💾 Enregistrer et fermer</button>
@@ -3630,6 +3643,7 @@ function renderSettingsBody(){
       <div class="field"><label>Nom du magasin</label><input id="genShopName" value="${escapeHtml(DB.settings.shopName)}"></div>
       <div class="field"><label>Seuil de stock faible par défaut</label><input type="number" id="genLowStock" value="${DB.settings.lowStockDefault}"></div>
       <div class="field"><label>Alerte péremption par défaut (jours avant) — réglable produit par produit</label><input type="number" id="genExpiryDays" value="${DB.settings.expiryWarnDays}"></div>
+      <div class="field"><label>Largeur du papier de l'imprimante de tickets (cet ordinateur)</label><select id="genTicketW"><option value="80" ${ticketWidth()==='80'?'selected':''}>80 mm (le plus courant)</option><option value="58" ${ticketWidth()==='58'?'selected':''}>58 mm (petit ticket)</option></select></div>
       <button class="btn btn-primary" onclick="saveGeneralSettings()">Enregistrer</button>
     </div>`;
   } else if(SETTINGS_TAB==='backup'){
@@ -3721,6 +3735,7 @@ function saveGeneralSettings(){
   DB.settings.shopName = document.getElementById('genShopName').value.trim();
   DB.settings.lowStockDefault = parseFloat(document.getElementById('genLowStock').value)||0;
   DB.settings.expiryWarnDays = parseFloat(document.getElementById('genExpiryDays').value)||30;
+  setTicketWidth(document.getElementById('genTicketW').value);
   saveDB(); toast('Paramètres enregistrés.');
 }
 

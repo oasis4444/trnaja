@@ -1114,6 +1114,7 @@ const NAV_ITEMS = [
   ]},
   {sec:'Pilotage', items:[
     {id:'stats', ico:'📊', label:'Statistiques & Bilans', perm:'stats'},
+    {id:'salesReport', ico:'📑', label:'Rapport produits vendus', perm:'stats'},
     {id:'journal', ico:'🕓', label:'Historique / Journal', perm:'admin'},
     {id:'settings', ico:'⚙️', label:'Paramètres', perm:'admin'},
   ]},
@@ -1132,6 +1133,7 @@ const PAGE_TITLES = {
   expenses:['Dépenses','Sorties de caisse du magasin'],
   suppliers:['Fournisseurs','Répertoire des fournisseurs'],
   stats:['Statistiques & Bilans','Analyse des ventes et bénéfices'],
+  salesReport:['Rapport produits vendus','Quantités vendues par jour, mois ou année'],
   journal:['Historique / Journal',"Traçabilité de toutes les opérations"],
   settings:['Paramètres','Utilisateurs, catégories, unités, sauvegarde'],
 };
@@ -3443,6 +3445,92 @@ function exportStatsBilanPDF(){
   }
   html += '<h2>Détail des ventes</h2>' + tableHtml(['N°','Date','Client','Caissier','Total'], b.sales.map(x=>[x.number, fmtDate(x.date), x.clientName, x.cashierName, fmtAr(x.total)]));
   printPDFDoc(periodTitle(STATS_PERIOD, STATS_REF), '', html);
+}
+
+/* =========================================================
+   RAPPORT DES PRODUITS VENDUS (jour / mois / année)
+========================================================= */
+let SR_PERIOD = 'month', SR_REF = null, SR_CAT = '';
+function srRows(){
+  const b = periodBounds(SR_PERIOD, SR_REF), s=b[0].toISOString(), e=b[1].toISOString();
+  const sales = DB.sales.filter(x=>x.status==='valid' && x.date>=s && x.date<=e);
+  const map = {};
+  sales.forEach(sale=>(sale.items||[]).forEach(it=>{
+    const m = map[it.productId] || (map[it.productId] = { pid:it.productId, name:it.name, base:0, ca:0, byUnit:{} });
+    const q = it.qty*(it.unitQtyInBase||1);
+    m.base += q; m.ca += it.qty*it.unitPrice;
+    const un = it.unitName || '';
+    m.byUnit[un] = (m.byUnit[un]||0) + it.qty;
+  }));
+  let rows = Object.values(map).map(m=>{
+    const p = byId(DB.products, m.pid);
+    const baseU = p && p.units && p.units.length ? [...p.units].sort((a,b)=>a.qtyInBase-b.qtyInBase)[0].name : '';
+    return { ...m, name: p?p.name:m.name, catId: p?p.categoryId:'', baseUnit: baseU };
+  });
+  if(SR_CAT) rows = rows.filter(r=>r.catId===SR_CAT);
+  rows.sort((a,b)=>b.ca-a.ca);
+  return { rows, nbSales: sales.length };
+}
+/* Quantité lisible : Kg -> tonnes dès 1000 */
+function srQtyText(r){
+  const u = (r.baseUnit||'').trim(), k = u.toLowerCase();
+  let t = fmtNum(roundQty(r.base))+' '+u;
+  if((k==='kg'||k==='kilo'||k==='kilos'||k==='kgs') && r.base>=1000) t += ' (= '+fmtNum(roundQty(r.base/1000))+' tonnes)';
+  if((k==='l'||k==='litre'||k==='litres') && r.base>=1000) t += ' (= '+fmtNum(roundQty(r.base/1000))+' m³)';
+  return t;
+}
+function srDetail(r){ return Object.keys(r.byUnit).map(k=>fmtNum(roundQty(r.byUnit[k]))+' '+k).join(' · '); }
+function srTitle(){
+  const b = periodBounds(SR_PERIOD, SR_REF), a=b[0];
+  if(SR_PERIOD==='day') return 'Rapport des produits vendus — '+a.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  if(SR_PERIOD==='month') return 'Rapport mensuel des produits vendus — '+a.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+  return 'Rapport annuel des produits vendus — '+a.getFullYear();
+}
+function render_salesReport(c){
+  if(!SR_REF) SR_REF = todayLocal();
+  if(SR_PERIOD==='week') SR_PERIOD='month';
+  const picker = SR_PERIOD==='month' ? '<input type="month" class="filter" value="'+SR_REF.slice(0,7)+'" onchange="SR_REF=this.value+\'-01\';renderSalesReportBody()">'
+    : SR_PERIOD==='year' ? '<select class="filter" onchange="SR_REF=this.value+\'-01-01\';renderSalesReportBody()">'+statsYears().map(y=>'<option value="'+y+'"'+(String(y)===SR_REF.slice(0,4)?' selected':'')+'>'+y+'</option>').join('')+'</select>'
+    : '<input type="date" class="filter" value="'+SR_REF+'" onchange="SR_REF=this.value;renderSalesReportBody()">';
+  c.innerHTML = `
+    <div class="toolbar">
+      <div class="pill-row">${[['day','Par jour'],['month','Par mois'],['year','Par année']].map(([k,l])=>`<button class="${SR_PERIOD===k?'active':''}" onclick="SR_PERIOD='${k}';SR_REF=todayLocal();refresh()">${l}</button>`).join('')}</div>
+      ${picker}
+      <select class="filter" onchange="SR_CAT=this.value;renderSalesReportBody()"><option value="">Toutes les catégories</option>${DB.categories.map(ct=>`<option value="${ct.id}" ${SR_CAT===ct.id?'selected':''}>${escapeHtml(ct.name)}</option>`).join('')}</select>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" onclick="exportSalesReport()">📤 Excel</button>
+      <button class="btn btn-primary" onclick="printSalesReport()">🖨️ Imprimer le rapport</button>
+    </div>
+    <div id="srBody"></div>`;
+  renderSalesReportBody();
+}
+function renderSalesReportBody(){
+  const { rows, nbSales } = srRows();
+  const total = rows.reduce((a,r)=>a+r.ca,0);
+  document.getElementById('srBody').innerHTML = `
+    <h3 style="margin:6px 0 14px;font-size:17px;color:var(--green-900);text-transform:capitalize;">${escapeHtml(srTitle())}</h3>
+    <div class="grid grid-3" style="margin-bottom:14px;">
+      <div class="kpi"><div class="lbl">Produits différents vendus</div><div class="val">${rows.length}</div></div>
+      <div class="kpi"><div class="lbl">Nombre de ventes</div><div class="val">${nbSales}</div></div>
+      <div class="kpi"><div class="lbl">Chiffre d'affaires</div><div class="val">${fmtAr(total)}</div></div>
+    </div>
+    <div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Produit</th><th>Quantité vendue</th><th>Détail par unité</th><th style="text-align:right;">Chiffre d'affaires</th></tr></thead>
+      <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${i+1}</td><td><b>${escapeHtml(r.name)}</b></td><td><b>${escapeHtml(srQtyText(r))}</b></td><td class="small-note">${escapeHtml(srDetail(r))}</td><td style="text-align:right;">${fmtAr(r.ca)}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty-state">Aucune vente sur cette période.</div></td></tr>'}</tbody>
+    </table></div></div>`;
+}
+function printSalesReport(){
+  const { rows, nbSales } = srRows();
+  const total = rows.reduce((a,r)=>a+r.ca,0);
+  const html = `<p><b>${nbSales}</b> vente(s) · <b>${rows.length}</b> produit(s) différent(s) · Chiffre d'affaires : <b>${escapeHtml(fmtAr(total))}</b>${SR_CAT?' · Catégorie : '+escapeHtml((byId(DB.categories,SR_CAT)||{}).name||''):''}</p>`
+    + tableHtml(['#','Produit','Quantité vendue','Détail par unité','Chiffre d’affaires'], rows.map((r,i)=>[String(i+1), r.name, srQtyText(r), srDetail(r), fmtAr(r.ca)]))
+    + (rows.length? `<p style="text-align:right;font-weight:700;margin-top:8px;">TOTAL : ${escapeHtml(fmtAr(total))}</p>`:'');
+  printPDFDoc(srTitle(), '', html);
+}
+function exportSalesReport(){
+  const { rows } = srRows();
+  exportData('TRNaja_Rapport_ventes_'+SR_PERIOD+'_'+SR_REF, 'Produits vendus', ['Produit','Quantité (unité de base)','Unité','Détail par unité','Chiffre d’affaires'],
+    rows.map(r=>[r.name, roundQty(r.base), r.baseUnit, srDetail(r), Math.round(r.ca)]));
 }
 
 /* =========================================================

@@ -474,7 +474,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div class="mark"><img id="sidebarLogoImg" alt="TR Naja"></div>
-      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2</div></div>
+      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.1</div></div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
     <div class="sidebar-user">
@@ -687,10 +687,34 @@ function loadDB(){
     DB = seedDB(); saveDB();
   }
 }
+/* Libère de la place dans le navigateur : les copies de secours internes passent AVANT la base principale */
+function freeStorageSpace(){
+  let freed = false;
+  try{ if(localStorage.getItem('trnaja_avant_restauration')!==null){ localStorage.removeItem('trnaja_avant_restauration'); freed = true; } }catch(e){}
+  try{
+    const snaps = Object.keys(localStorage).filter(k=>k.startsWith('trnaja_snapshot_')).sort();
+    while(snaps.length){ localStorage.removeItem(snaps.shift()); freed = true; break; } // une à la fois, la plus ancienne d'abord
+  }catch(e){}
+  return freed;
+}
+let STORAGE_ALERT_SHOWN = false;
 function saveDB(skipSyncPush){
-  localStorage.setItem(DB_KEY, JSON.stringify(DB));
+  const json = JSON.stringify(DB);
+  let ok = false;
+  for(let i=0;i<12;i++){
+    try{ localStorage.setItem(DB_KEY, json); ok = true; break; }
+    catch(e){ if(!freeStorageSpace()) break; }
+  }
+  if(!ok){
+    console.error('Enregistrement local impossible : stockage du navigateur plein');
+    if(!STORAGE_ALERT_SHOWN){
+      STORAGE_ALERT_SHOWN = true;
+      try{ alert("ATTENTION : la mémoire du navigateur est pleine. Les données ne sont plus enregistrées sur cet écran.\n\n1) Ne fermez pas le logiciel.\n2) Allez dans Paramètres > Sauvegarde et faites une sauvegarde (télécharger).\n3) Prévenez votre technicien."); }catch(e){}
+    }
+  }
   if(!skipSyncPush && typeof scheduleSyncPush==='function') scheduleSyncPush();
   if(typeof extMarkDirty==='function') extMarkDirty();
+  return ok;
 }
 function logHistory(action, details){
   DB.history.unshift({ id: uid('h'), date: nowISO(), userId: SESSION.user? SESSION.user.id:null, userName: SESSION.user? SESSION.user.fullName||SESSION.user.username : 'Système', action, details: details||'' });
@@ -709,8 +733,8 @@ function saveDailySnapshot(){
   try{
     localStorage.setItem(SNAPSHOT_PREFIX + todayStr(), JSON.stringify(DB));
     const allKeys = Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort();
-    while(allKeys.length > 7){ localStorage.removeItem(allKeys.shift()); }
-  }catch(e){ console.warn('Point de restauration non sauvegardé (espace de stockage plein ?)', e); }
+    while(allKeys.length > 3){ localStorage.removeItem(allKeys.shift()); }
+  }catch(e){ try{ Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort().slice(0,-1).forEach(k=>localStorage.removeItem(k)); }catch(_){} console.warn('Point de restauration non sauvegardé (espace de stockage plein ?)', e); }
 }
 function listSnapshots(){
   return Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort().reverse().map(k=>k.slice(SNAPSHOT_PREFIX.length));
@@ -2415,7 +2439,15 @@ function nextInvoiceNumber(){
   return String(n).padStart(6,'0');
 }
 
+let SALE_BUSY = false;
 function finalizeSale(isCredit, after){
+  if(SALE_BUSY) return; // évite d'enregistrer 2 fois la même vente si on clique plusieurs fois
+  SALE_BUSY = true;
+  try{ finalizeSaleInner(isCredit, after); }
+  catch(err){ console.error(err); toast('Erreur pendant la vente : '+(err&&err.message||err), 'err'); }
+  finally{ SALE_BUSY = false; } // le panier est vidé dès l'enregistrement : un 2e clic ne refait pas la vente
+}
+function finalizeSaleInner(isCredit, after){
   if(!CART.length){ toast('Le panier est vide.', 'err'); return; }
   // vérifier stock suffisant (magasin résolu par article)
   for(const it of CART){
@@ -2471,11 +2503,11 @@ function finalizeSale(isCredit, after){
 
   addNotification('sale', `Nouvelle vente ${sale.number} — ${sale.clientName} — ${fmtAr(total)}`);
   logHistory('Vente enregistrée', `Facture ${sale.number} — ${fmtAr(total)}`);
-  saveDB();
-  maybeRunAutoBackup();
-  CART = [];
+  const saved = saveDB();
+  CART = []; // le panier est vidé tout de suite : un 2e clic ne peut plus recréer la vente
+  try{ maybeRunAutoBackup(); }catch(e){ console.warn(e); }
   refresh();
-  toast('Vente enregistrée : n°'+sale.number);
+  toast(saved===false ? 'Vente faite mais NON enregistrée sur cet écran (mémoire pleine) — faites une sauvegarde !' : 'Vente enregistrée : n°'+sale.number, saved===false?'err':undefined);
   if(after==='print' || after==='download'){
     printSaleDoc(sale, POS_DOC, after);
   } else {

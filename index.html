@@ -474,7 +474,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div class="mark"><img id="sidebarLogoImg" alt="TR Naja"></div>
-      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.1</div></div>
+      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.2</div></div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
     <div class="sidebar-user">
@@ -677,15 +677,101 @@ function migrateDB(){
   (DB.users||[]).forEach(u=>{ if(u.email===undefined) u.email=''; if(!u.permissions) u.permissions={}; });
 }
 
-function loadDB(){
-  try{
-    const raw = localStorage.getItem(DB_KEY);
-    if(raw){ DB = JSON.parse(raw); migrateDB(); }
-    else { DB = seedDB(); saveDB(); }
-  }catch(e){
-    console.error('Erreur de lecture des données, réinitialisation.', e);
-    DB = seedDB(); saveDB();
+/* ---- Stockage principal : IndexedDB (très grand), avec localStorage en secours ----
+   localStorage est limité à ~5 Mo : au-delà, les ventes ne s'enregistraient plus.
+   IndexedDB accepte des centaines de Mo. Le contenu de localStorage est migré automatiquement. */
+const IDB_NAME = 'trnaja_idb_' + DB_KEY;
+const IDBM = { ok:false, cache:null, db:null, busy:false, pending:null, err:'', snaps:[] };
+function idbOpenMain(){
+  return new Promise((res,rej)=>{
+    if(typeof indexedDB==='undefined') return rej(new Error('IndexedDB indisponible'));
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onupgradeneeded = ()=>{ r.result.createObjectStore('kv'); };
+    r.onsuccess = ()=>res(r.result);
+    r.onerror = ()=>rej(r.error||new Error('IndexedDB erreur'));
+    r.onblocked = ()=>rej(new Error('IndexedDB bloqué'));
+  });
+}
+function idbPreload(){
+  return new Promise(resolve=>{
+    let done = false; const fin = ()=>{ if(!done){ done = true; resolve(); } };
+    setTimeout(fin, 4000);
+    idbOpenMain().then(db=>{
+      if(done){ try{ db.close(); }catch(e){} return; } // arrivé trop tard : on ne l'utilise pas (évite d'écraser des données plus récentes)
+      IDBM.db = db;
+      const store = db.transaction('kv','readonly').objectStore('kv');
+      const rq = store.get('db');
+      try{ const rk = store.getAllKeys(); rk.onsuccess = ()=>{ IDBM.snaps = (rk.result||[]).filter(k=>String(k).startsWith('snap_')).map(k=>String(k).slice(5)).sort(); }; }catch(e){}
+      rq.onsuccess = ()=>{ if(done) return; IDBM.cache = rq.result || null; IDBM.ok = true; fin(); };
+      rq.onerror = ()=>{ IDBM.err = 'lecture'; fin(); };
+      try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
+    }).catch(e=>{ IDBM.err = String(e&&e.message||e); fin(); });
+  });
+}
+function idbWrite(json, ts){
+  if(!IDBM.db){ return; }
+  if(IDBM.busy){ IDBM.pending = {json, ts}; return; }
+  IDBM.busy = true;
+  let tx;
+  try{ tx = IDBM.db.transaction('kv','readwrite'); tx.objectStore('kv').put({json, ts}, 'db'); }
+  catch(e){ IDBM.busy = false; idbFailed(json, ts, e); return; }
+  tx.oncomplete = ()=>{
+    IDBM.busy = false;
+    try{ localStorage.removeItem(DB_KEY); localStorage.removeItem(DB_KEY+'_ts'); }catch(e){} // plus besoin de la grosse copie dans localStorage
+    if(IDBM.pending){ const p = IDBM.pending; IDBM.pending = null; idbWrite(p.json, p.ts); }
+  };
+  const bad = (e)=>{ IDBM.busy = false; idbFailed(json, ts, e); };
+  tx.onerror = ()=>bad(tx.error); tx.onabort = ()=>bad(tx.error);
+}
+function idbFailed(json, ts, e){
+  IDBM.ok = false; IDBM.err = String(e&&e.message||e);
+  console.error('IndexedDB : écriture impossible, retour à localStorage', e);
+  if(!lsWrite(json, ts)) showStorageAlert();
+}
+function idbPut(key, value){
+  return new Promise(res=>{
+    if(!IDBM.db || !IDBM.ok) return res(false);
+    try{ const tx = IDBM.db.transaction('kv','readwrite'); tx.objectStore('kv').put(value, key); tx.oncomplete = ()=>res(true); tx.onerror = tx.onabort = ()=>res(false); }catch(e){ res(false); }
+  });
+}
+function idbGet(key){
+  return new Promise(res=>{
+    if(!IDBM.db) return res(null);
+    try{ const rq = IDBM.db.transaction('kv','readonly').objectStore('kv').get(key); rq.onsuccess = ()=>res(rq.result===undefined?null:rq.result); rq.onerror = ()=>res(null); }catch(e){ res(null); }
+  });
+}
+function idbDel(key){
+  return new Promise(res=>{
+    if(!IDBM.db) return res(false);
+    try{ const tx = IDBM.db.transaction('kv','readwrite'); tx.objectStore('kv').delete(key); tx.oncomplete = ()=>res(true); tx.onerror = tx.onabort = ()=>res(false); }catch(e){ res(false); }
+  });
+}
+window.addEventListener('beforeunload', e=>{ if(IDBM.busy || IDBM.pending){ e.preventDefault(); e.returnValue = ''; } });
+function lsWrite(json, ts){
+  for(let i=0;i<12;i++){
+    try{ localStorage.setItem(DB_KEY, json); try{ localStorage.setItem(DB_KEY+'_ts', String(ts)); }catch(_){} return true; }
+    catch(e){ if(!freeStorageSpace()) return false; }
   }
+  return false;
+}
+function showStorageAlert(){
+  if(STORAGE_ALERT_SHOWN) return; STORAGE_ALERT_SHOWN = true;
+  try{ alert("ATTENTION : la mémoire du navigateur est pleine. Les données ne sont plus enregistrées sur cet écran.\n\n1) Ne fermez pas le logiciel.\n2) Allez dans Paramètres > Sauvegarde et faites une sauvegarde (télécharger).\n3) Prévenez votre technicien."); }catch(e){}
+}
+function loadDB(){
+  let raw = null, rawTs = 0;
+  try{ raw = localStorage.getItem(DB_KEY); rawTs = Number(localStorage.getItem(DB_KEY+'_ts'))||0; }catch(e){}
+  const rec = IDBM.cache;
+  const cands = [];
+  if(rec && rec.json) cands.push({src:rec.json, ts:rec.ts||0, idb:true});
+  if(raw) cands.push({src:raw, ts:rawTs, idb:false});
+  cands.sort((a,b)=> (b.ts-a.ts) || (b.idb-a.idb)); // la plus récente d'abord (IndexedDB si égalité)
+  for(const c of cands){
+    try{ DB = JSON.parse(c.src); migrateDB(); if(!c.idb && IDBM.ok) saveDB(true); return; }
+    catch(e){ console.error('Copie illisible, essai de la suivante', e); }
+  }
+  if(cands.length) console.error('Erreur de lecture des données, réinitialisation.');
+  DB = seedDB(); saveDB();
 }
 /* Libère de la place dans le navigateur : les copies de secours internes passent AVANT la base principale */
 function freeStorageSpace(){
@@ -700,17 +786,12 @@ function freeStorageSpace(){
 let STORAGE_ALERT_SHOWN = false;
 function saveDB(skipSyncPush){
   const json = JSON.stringify(DB);
+  const ts = Date.now();
   let ok = false;
-  for(let i=0;i<12;i++){
-    try{ localStorage.setItem(DB_KEY, json); ok = true; break; }
-    catch(e){ if(!freeStorageSpace()) break; }
-  }
-  if(!ok){
-    console.error('Enregistrement local impossible : stockage du navigateur plein');
-    if(!STORAGE_ALERT_SHOWN){
-      STORAGE_ALERT_SHOWN = true;
-      try{ alert("ATTENTION : la mémoire du navigateur est pleine. Les données ne sont plus enregistrées sur cet écran.\n\n1) Ne fermez pas le logiciel.\n2) Allez dans Paramètres > Sauvegarde et faites une sauvegarde (télécharger).\n3) Prévenez votre technicien."); }catch(e){}
-    }
+  if(IDBM.ok){ idbWrite(json, ts); ok = true; }
+  else{
+    ok = lsWrite(json, ts);
+    if(!ok){ console.error('Enregistrement local impossible : stockage du navigateur plein'); showStorageAlert(); }
   }
   if(!skipSyncPush && typeof scheduleSyncPush==='function') scheduleSyncPush();
   if(typeof extMarkDirty==='function') extMarkDirty();
@@ -730,14 +811,25 @@ function logHistory(action, details){
 ========================================================= */
 const SNAPSHOT_PREFIX = 'trnaja_snapshot_';
 function saveDailySnapshot(){
+  const day = todayStr();
+  if(IDBM.ok){
+    idbPut('snap_'+day, JSON.stringify(DB)).then(ok=>{
+      if(!ok) return;
+      if(!IDBM.snaps.includes(day)) IDBM.snaps.push(day);
+      IDBM.snaps.sort();
+      while(IDBM.snaps.length > 7){ idbDel('snap_'+IDBM.snaps.shift()); }
+    });
+    return;
+  }
   try{
-    localStorage.setItem(SNAPSHOT_PREFIX + todayStr(), JSON.stringify(DB));
+    localStorage.setItem(SNAPSHOT_PREFIX + day, JSON.stringify(DB));
     const allKeys = Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort();
     while(allKeys.length > 3){ localStorage.removeItem(allKeys.shift()); }
   }catch(e){ try{ Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort().slice(0,-1).forEach(k=>localStorage.removeItem(k)); }catch(_){} console.warn('Point de restauration non sauvegardé (espace de stockage plein ?)', e); }
 }
 function listSnapshots(){
-  return Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).sort().reverse().map(k=>k.slice(SNAPSHOT_PREFIX.length));
+  const ls = Object.keys(localStorage).filter(k=>k.startsWith(SNAPSHOT_PREFIX)).map(k=>k.slice(SNAPSHOT_PREFIX.length));
+  return Array.from(new Set([...IDBM.snaps, ...ls])).sort().reverse();
 }
 const AUTO_BACKUP_INTERVAL_MS = 6*60*60*1000; // toutes les 6 heures d'utilisation, pas juste 1x/jour
 function maybeRunAutoBackup(){
@@ -931,7 +1023,7 @@ function restoreFromData(data, label){
   if(!data || !Array.isArray(data.users) || !Array.isArray(data.products) || !data.settings){ toast('Fichier invalide : ce n’est pas une sauvegarde TR Naja.', 'err'); return; }
   const nb = `${data.products.length} produits, ${(data.sales||[]).length} ventes, ${(data.credits||[]).length} dettes`;
   confirmAction(`Remplacer TOUTES les données actuelles par la ${label||'sauvegarde'} ? (${nb}). Une copie de sécurité de l’état actuel est gardée automatiquement.`, ()=>{
-    try{ localStorage.setItem('trnaja_avant_restauration', JSON.stringify(DB)); }catch(e){}
+    if(IDBM.ok) idbPut('avant_restauration', JSON.stringify(DB)); else { try{ localStorage.setItem('trnaja_avant_restauration', JSON.stringify(DB)); }catch(e){} }
     data.settings._syncStamp = nowISO();   // la restauration doit gagner sur le serveur
     DB = data; migrateDB(); saveDB();
     toast('Données restaurées.');
@@ -3823,14 +3915,17 @@ function toggleAutoBackup(enabled){
   toast(enabled? 'Sauvegarde automatique activée.' : 'Sauvegarde automatique désactivée.');
 }
 function restoreSnapshot(dateStr){
-  confirmAction(`Restaurer les données telles qu'elles étaient le ${fmtDateOnly(dateStr+'T00:00:00')} ? Toutes les modifications faites depuis seront perdues.`, ()=>{
+  confirmAction(`Restaurer les données telles qu'elles étaient le ${fmtDateOnly(dateStr+'T00:00:00')} ? Toutes les modifications faites depuis seront perdues.`, async ()=>{
     try{
-      const raw = localStorage.getItem(SNAPSHOT_PREFIX + dateStr);
+      let raw = await idbGet('snap_'+dateStr);
+      if(!raw){ try{ raw = localStorage.getItem(SNAPSHOT_PREFIX + dateStr); }catch(e){} }
       if(!raw){ toast('Point de restauration introuvable.', 'err'); return; }
-      DB = JSON.parse(raw); DB.settings._syncStamp = nowISO();
-      saveDB();
+      const data = JSON.parse(raw); data.settings._syncStamp = nowISO();
+      if(IDBM.ok) await idbPut('avant_restauration', JSON.stringify(DB));
+      DB = data; migrateDB(); saveDB();
       toast('Données restaurées au ' + fmtDateOnly(dateStr+'T00:00:00') + '.');
-      location.reload();
+      const done = ()=>setTimeout(()=>location.reload(), 700);
+      if(SYNC.enabled && SYNC.url){ clearTimeout(SYNC_PUSH_DEBOUNCE); pbPush().then(done, done); } else done();
     }catch(e){ toast('Erreur lors de la restauration.', 'err'); }
   }, 'Restaurer', true);
 }
@@ -4680,6 +4775,7 @@ setInterval(()=>{
   }
 }, 20000);
 
+idbPreload().then(()=>{
 loadDB();
 loadSyncConfig();
 /* Si le logiciel est ouvert DEPUIS le serveur PocketBase lui-même (ex: http://192.168.1.137:8090/,
@@ -4708,6 +4804,7 @@ loadSyncConfig();
 if(SYNC.enabled) startSyncLoop();
 tryRestoreSession();
 extInit();
+});
 
 </script>
 </body>

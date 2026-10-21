@@ -8,3 +8,4 @@
 - Commits : terminer par `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` et `Claude-Session: https://claude.ai/code/session_01AZBPRmm5Y7XfzgbPDiTZ61`.
 - Excel : pas de bibliothèque externe, `MX` (mini-xlsx, dans index.html) lit/écrit les .xlsx hors-ligne. Ticket 58/80 mm : `ticketWidth()` (localStorage), `fitReceiptPageHeight`.
 - Sauvegarde externe : module `EXT` (dossier choisi, File System Access API), restauration `restoreFromData`. Produits identiques : `findProductByName`. Rapports : `render_salesReport`.
+- Stockage : la base `DB` est dans IndexedDB (`IDBM`, `idbWrite`, `idbPreload` → boot asynchrone), localStorage seulement en secours (navigateur sans IndexedDB). Snapshots internes = clés `snap_AAAA-MM-JJ` dans IndexedDB. Ne jamais remettre la grosse base dans localStorage (limite 5 Mo → ventes perdues). La version s'affiche sous « TR Naja » (v2.2).

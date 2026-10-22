@@ -424,6 +424,32 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .card-alert-orange{background:#fdf1de;border-color:#f5dcab;}
 .card-alert-orange .card-head h3{color:#9a5b0f;}
 .select-row select{flex:1;}
+
+/* ---------- Assistant IA (Central IA) ---------- */
+.cia-bubble{position:fixed;right:20px;bottom:20px;width:58px;height:58px;border-radius:50%;border:none;cursor:pointer;font-size:28px;
+  background:linear-gradient(160deg,var(--green-600),var(--green-800));color:#fff;box-shadow:0 10px 24px -6px rgba(6,43,28,.5);z-index:900;}
+.cia-bubble:hover{transform:scale(1.06);}
+.cia-panel{position:fixed;right:20px;bottom:90px;width:min(420px,calc(100vw - 32px));height:min(580px,calc(100vh - 120px));display:none;flex-direction:column;
+  background:#fff;border-radius:var(--radius);box-shadow:0 20px 50px -10px rgba(6,43,28,.45);z-index:901;overflow:hidden;border:1px solid var(--line);}
+.cia-panel.show{display:flex;}
+.cia-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--green-800);color:#fff;font-weight:700;}
+.cia-x{background:transparent;border:none;color:#fff;font-size:17px;cursor:pointer;margin-left:6px;}
+.cia-msgs{flex:1;overflow-y:auto;padding:12px;background:var(--green-50);display:flex;flex-direction:column;gap:8px;}
+.cia-m{padding:9px 12px;border-radius:12px;max-width:92%;line-height:1.45;font-size:14px;word-wrap:break-word;}
+.cia-u{align-self:flex-end;background:var(--green-700);color:#fff;}
+.cia-a{align-self:flex-start;background:#fff;border:1px solid var(--line);color:var(--ink);}
+.cia-muted{color:var(--ink-soft);font-size:12px;}
+.cia-kpis{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.cia-kpis span{background:var(--green-100);border-radius:8px;padding:3px 8px;font-size:12px;}
+.cia-tbl{margin-top:8px;overflow-x:auto;}
+.cia-tbl table{border-collapse:collapse;font-size:12px;width:100%;}
+.cia-tbl th,.cia-tbl td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;white-space:nowrap;}
+.cia-tbl th{background:var(--green-50);}
+.cia-sugg{display:flex;flex-wrap:wrap;gap:6px;padding:6px 10px;background:var(--green-50);}
+.cia-sugg button{border:1px solid var(--line);background:#fff;border-radius:14px;padding:4px 10px;font-size:12px;cursor:pointer;}
+.cia-form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line);}
+.cia-form input{flex:1;padding:9px 10px;border:1px solid var(--line);border-radius:10px;font-size:14px;}
+@media print{.cia-bubble,.cia-panel{display:none!important;}}
 </style>
 </head>
 <body>
@@ -2932,6 +2958,7 @@ function render_settings(c){
       <div class="tab-h ${SETTINGS_TAB==='general'?'active':''}" onclick="setSettingsTab('general')">Général</div>
       <div class="tab-h ${SETTINGS_TAB==='backup'?'active':''}" onclick="setSettingsTab('backup')">Sauvegarde</div>
       <div class="tab-h ${SETTINGS_TAB==='sync'?'active':''}" onclick="setSettingsTab('sync')">🌐 Réseau</div>
+      ${isAdmin()?`<div class="tab-h ${SETTINGS_TAB==='ia'?'active':''}" onclick="setSettingsTab('ia')">🤖 Assistant IA</div>`:''}
     </div>
     <div id="settingsBody"></div>
   `;
@@ -3010,6 +3037,8 @@ function renderSettingsBody(){
   } else if(SETTINGS_TAB==='sync'){
     body.innerHTML = renderSyncSettings();
     setTimeout(()=>{ updateSyncBadge(); uiDetectIp(); }, 0);
+  } else if(SETTINGS_TAB==='ia' && isAdmin()){
+    body.innerHTML = renderCiaSettings();
   }
 }
 
@@ -3906,6 +3935,290 @@ loadSyncConfig();
     }).catch(()=>{});
   }
 })();
+
+/* =========================================================
+   ASSISTANT IA (Central IA local)
+   - Le code de connexion est collé dans Paramètres → 🤖 Assistant IA
+   - Config gardée à part (localStorage « trnaja_cia »), jamais synchronisée
+   - Les données utiles sont envoyées au Central IA avant de poser une question
+========================================================= */
+const CIA_KEY = 'trnaja_cia';
+let CIA = (()=>{ try{ return JSON.parse(localStorage.getItem(CIA_KEY)||'null') || {}; }catch(e){ return {}; } })();
+let CIA_CONV = null;
+let CIA_PUSHING = null;
+const CIA_PUSH_EVERY = 10*60*1000; // 10 minutes
+
+function ciaSave(){ try{ localStorage.setItem(CIA_KEY, JSON.stringify(CIA)); }catch(e){} }
+function ciaConnected(){ return !!(CIA.url && CIA.key && CIA.app); }
+function ciaCanUse(){ return ciaConnected() && (isAdmin() || can('seeProfit')); }
+
+function ciaDecodeCode(code){
+  code = String(code||'').trim();
+  if(!code.startsWith('CIA1-')) throw new Error('Ce code ne vient pas du Central IA (il doit commencer par CIA1-).');
+  let raw = code.slice(5).replace(/-/g,'+').replace(/_/g,'/');
+  while(raw.length % 4) raw += '=';
+  const txt = decodeURIComponent(Array.from(atob(raw)).map(c=>'%'+c.charCodeAt(0).toString(16).padStart(2,'0')).join(''));
+  const info = JSON.parse(txt);
+  if(!info.url || !info.key || !info.app) throw new Error('Code incomplet.');
+  return { url: String(info.url).replace(/\/+$/,''), key: info.key, app: info.app, nom: info.nom||info.app };
+}
+
+async function ciaFetch(path, opts){
+  opts = opts || {};
+  let res;
+  try{
+    res = await fetch(CIA.url + path, {
+      method: opts.method || 'GET',
+      headers: Object.assign({'Content-Type':'application/json', 'X-API-Key': CIA.key}, opts.headers||{}),
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  }catch(e){
+    throw new Error('Impossible de joindre le Central IA. Vérifiez qu\'il est bien démarré sur cet ordinateur.');
+  }
+  let data = null;
+  try{ data = await res.json(); }catch(e){}
+  if(!res.ok){
+    const d = data && data.detail;
+    throw new Error(typeof d==='string' ? d : ('Erreur ' + res.status));
+  }
+  return data;
+}
+
+/* ---------- Préparation des données pour le Central IA ---------- */
+function ciaDay(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  if(isNaN(d)) return String(iso).slice(0,10);
+  return localKey(d,'day');
+}
+function ciaBuildDatasets(){
+  const since = new Date(); since.setDate(since.getDate()-365);
+  const recent = iso => { const d = new Date(iso); return !isNaN(d) && d >= since; };
+  const catName = id => { const c = (DB.categories||[]).find(x=>x.id===id); return c ? c.name : ''; };
+  const prodById = {}; (DB.products||[]).forEach(p=>{ prodById[p.id]=p; });
+  const num = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+  const sales = (DB.sales||[]).filter(s=>recent(s.date));
+  const ventes = sales.map(s=>({
+    id: s.id, numero: s.number||'', date: ciaDay(s.date), caissier: s.cashierName||'', client: s.clientName||'',
+    total: num(s.total), paye: num(s.paid), statut: s.status||'valid', credit: s.isCredit?1:0,
+  }));
+  const lignes = [];
+  sales.forEach(s=>{
+    (s.items||[]).forEach(it=>{
+      const p = prodById[it.productId] || {};
+      const qty = num(it.qty), montant = num(it.unitPrice)*qty;
+      const cout = num(p.purchasePrice)*num(it.unitQtyInBase||1)*qty;
+      lignes.push({ vente_id: s.id, date: ciaDay(s.date), produit: it.name || p.name || '', categorie: catName(p.categoryId),
+        quantite: qty, prix_unitaire: num(it.unitPrice), montant, cout, marge: montant-cout, statut: s.status||'valid' });
+    });
+  });
+  const produits = (DB.products||[]).map(p=>({
+    id: p.id, nom: p.name||'', categorie: catName(p.categoryId), prix_achat: num(p.purchasePrice),
+    stock: totalStock(p.id), seuil: num(p.minThresholdBase), peremption: p.expiryDate ? String(p.expiryDate).slice(0,10) : '',
+    actif: p.active===false ? 0 : 1,
+  }));
+  const credits = (DB.credits||[]).map(c=>({
+    client: c.clientName||'', telephone: c.phone||'', date: ciaDay(c.date), total: num(c.total), paye: num(c.paid), reste: num(c.remaining),
+  }));
+  const depenses = (DB.expenses||[]).filter(e=>recent(e.date)).map(e=>({
+    date: ciaDay(e.date), categorie: e.category||'', montant: num(e.amount), note: e.note||'',
+  }));
+  const caisse = (DB.cashSessions||[]).filter(s=>recent(s.closedAt||s.openedAt||s.date)).map(s=>({
+    date: ciaDay(s.closedAt||s.openedAt||s.date), ouvert_par: s.openedBy||'', fond: num(s.openingAmount),
+    reel: num(s.closingAmountReal), theorique: num(s.theoretical), ecart: num(s.difference), statut: s.status||'open',
+  }));
+  return { ventes, lignes_ventes: lignes, produits, credits, depenses, caisse };
+}
+
+async function ciaPushAll(force){
+  if(!ciaConnected()) throw new Error('Assistant IA non connecté.');
+  if(!force && CIA.lastPush && (Date.now()-CIA.lastPush) < CIA_PUSH_EVERY && CIA.lastDbStamp===ciaDbStamp()) return null;
+  if(CIA_PUSHING) return CIA_PUSHING;
+  CIA_PUSHING = (async()=>{
+    const ds = ciaBuildDatasets();
+    let total = 0;
+    for(const name of Object.keys(ds)){
+      const rows = ds[name];
+      if(!rows.length) continue;
+      for(let i=0; i<rows.length; i+=5000){
+        await ciaFetch('/api/v1/data/'+name, { method:'POST', body:{ application_id: CIA.app, mode: i===0?'remplacer':'ajouter', rows: rows.slice(i,i+5000) } });
+      }
+      total += rows.length;
+    }
+    CIA.lastPush = Date.now(); CIA.lastDbStamp = ciaDbStamp(); ciaSave();
+    return total;
+  })();
+  try{ return await CIA_PUSHING; } finally { CIA_PUSHING = null; }
+}
+function ciaDbStamp(){
+  return [(DB.sales||[]).length, (DB.products||[]).length, (DB.credits||[]).length, (DB.expenses||[]).length,
+          (DB.cashSessions||[]).length, (DB.sales||[]).filter(s=>s.status==='cancelled').length,
+          (DB.credits||[]).reduce((a,c)=>a+(Number(c.remaining)||0),0), JSON.stringify(DB.stockLevels||{}).length].join('|');
+}
+
+/* ---------- Onglet Paramètres ---------- */
+function renderCiaSettings(){
+  const st = ciaConnected()
+    ? `<div class="small-note" style="color:var(--green-700);font-weight:700;">✅ Connecté au Central IA — ${escapeHtml(CIA.nom||CIA.app)} (${escapeHtml(CIA.url)})</div>
+       <div class="small-note">Dernier envoi des données : ${CIA.lastPush ? escapeHtml(new Date(CIA.lastPush).toLocaleString('fr-FR')) : 'jamais'}</div>`
+    : `<div class="small-note" style="color:var(--orange);font-weight:700;">Pas encore connecté.</div>`;
+  return `
+  <div class="card">
+    <div class="card-head"><h3>🤖 Assistant IA (Central IA)</h3></div>
+    <p class="small-note">L'assistant répond à vos questions sur vos ventes, bénéfices, stocks, crédits et dépenses — en français ou en malgache.
+    Il fonctionne avec le logiciel <b>Central IA</b> installé sur cet ordinateur.</p>
+    ${st}
+    <div style="margin-top:14px;">
+      <label><b>1.</b> Dans le Central IA : <i>Intégration</i> → choisir « TR Naja (boutique) » → <i>Générer un code de connexion</i> → Copier.</label>
+      <label style="display:block;margin-top:6px;"><b>2.</b> Collez le code ici :</label>
+      <textarea id="ciaCode" rows="3" style="width:100%;margin-top:6px;font-family:monospace;font-size:12px;" placeholder="CIA1-..."></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn btn-primary" onclick="ciaConnectFromCode()">🔗 Connecter</button>
+        ${ciaConnected() ? `
+        <button class="btn" onclick="ciaTest()">🧪 Tester</button>
+        <button class="btn" onclick="ciaSendNow()">📤 Envoyer les données maintenant</button>
+        <button class="btn btn-danger" onclick="ciaDisconnect()">Déconnecter</button>` : ''}
+      </div>
+    </div>
+    <p class="small-note" style="margin-top:14px;">Les données sont envoyées seulement au Central IA de cet ordinateur (adresse locale), automatiquement avant chaque question et toutes les 10 minutes environ.
+    Le bouton 🤖 en bas à droite ouvre le chat (administrateurs et personnes autorisées à voir les bénéfices).</p>
+  </div>`;
+}
+async function ciaConnectFromCode(){
+  const el = document.getElementById('ciaCode');
+  let info;
+  try{ info = ciaDecodeCode(el ? el.value : ''); }catch(e){ toast(e.message || 'Code invalide.', 'err'); return; }
+  const old = CIA; CIA = Object.assign({}, info);
+  try{
+    toast('Connexion au Central IA…', 'warn');
+    const n = await ciaPushAll(true);
+    ciaSave(); CIA_CONV = null;
+    toast('Assistant IA connecté. ' + (n||0) + ' ligne(s) envoyée(s).');
+  }catch(e){
+    CIA = old; ciaSave();
+    toast(e.message, 'err');
+  }
+  ciaUpdateBubble();
+  if(document.getElementById('settingsBody')) renderSettingsBody();
+}
+async function ciaTest(){
+  try{
+    const r = await fetch(CIA.url + '/api/v1/health');
+    if(!r.ok) throw new Error();
+    const h = await r.json();
+    toast('Central IA joignable (version ' + (h.version||'?') + ').');
+  }catch(e){ toast('Impossible de joindre le Central IA. Est-il démarré ?', 'err'); }
+}
+async function ciaSendNow(){
+  try{ toast('Envoi des données…', 'warn'); const n = await ciaPushAll(true); toast((n||0) + ' ligne(s) envoyée(s) au Central IA.'); }
+  catch(e){ toast(e.message, 'err'); }
+  if(document.getElementById('settingsBody')) renderSettingsBody();
+}
+function ciaDisconnect(){
+  CIA = {}; ciaSave(); CIA_CONV = null;
+  ciaUpdateBubble();
+  toast('Assistant IA déconnecté.');
+  if(document.getElementById('settingsBody')) renderSettingsBody();
+}
+
+/* ---------- Bulle de chat ---------- */
+function ciaEnsureUi(){
+  if(document.getElementById('ciaBubble')) return;
+  const b = document.createElement('button');
+  b.id = 'ciaBubble'; b.className = 'cia-bubble'; b.title = 'Assistant IA'; b.textContent = '🤖';
+  b.onclick = ()=>ciaToggle();
+  const p = document.createElement('div');
+  p.id = 'ciaPanel'; p.className = 'cia-panel';
+  p.innerHTML = `
+    <div class="cia-head"><span>🤖 Assistant IA</span>
+      <span><button class="cia-x" title="Nouvelle conversation" onclick="ciaNew()">↺</button><button class="cia-x" title="Fermer" onclick="ciaToggle(false)">✕</button></span></div>
+    <div class="cia-msgs" id="ciaMsgs"></div>
+    <div class="cia-sugg" id="ciaSugg"></div>
+    <form class="cia-form" onsubmit="ciaAsk(event)">
+      <input id="ciaInput" autocomplete="off" placeholder="Posez votre question… / Apetraho ny fanontanianao…">
+      <button class="btn btn-primary" id="ciaSend" type="submit">➤</button>
+    </form>`;
+  document.body.appendChild(b); document.body.appendChild(p);
+  ciaNew();
+}
+function ciaNew(){
+  CIA_CONV = null;
+  const m = document.getElementById('ciaMsgs'); if(!m) return;
+  m.innerHTML = '';
+  ciaAdd('a', 'Bonjour ! Posez-moi une question sur votre boutique. <br><span class="cia-muted">Manao ahoana ! Afaka manontany amin\'ny teny malagasy koa ianao.</span>');
+  const s = document.getElementById('ciaSugg');
+  const sugg = ['Ventes des 7 derniers jours', 'Bénéfice par produit ce mois-ci', 'Inona no tahiry ho lany ?', 'Iza no mitrosa ?'];
+  s.innerHTML = sugg.map(q=>`<button type="button" onclick="ciaQuick(this)">${escapeHtml(q)}</button>`).join('');
+}
+function ciaQuick(btn){ const i = document.getElementById('ciaInput'); i.value = btn.textContent; ciaAsk(); }
+function ciaToggle(force){
+  const p = document.getElementById('ciaPanel'); if(!p) return;
+  const open = force===undefined ? !p.classList.contains('show') : force;
+  p.classList.toggle('show', open);
+  if(open){ setTimeout(()=>{ const i=document.getElementById('ciaInput'); if(i) i.focus(); }, 50); ciaPushAll(false).catch(()=>{}); }
+}
+function ciaUpdateBubble(){
+  ciaEnsureUi();
+  const show = !!(SESSION.user && ciaCanUse());
+  document.getElementById('ciaBubble').style.display = show ? '' : 'none';
+  if(!show) document.getElementById('ciaPanel').classList.remove('show');
+}
+function ciaAdd(kind, html){
+  const m = document.getElementById('ciaMsgs');
+  const d = document.createElement('div');
+  d.className = 'cia-m cia-' + kind; d.innerHTML = html;
+  m.appendChild(d); m.scrollTop = m.scrollHeight;
+  return d;
+}
+function ciaFmt(v){ return typeof v==='number' ? v.toLocaleString('fr-FR') : String(v==null?'':v); }
+function ciaRender(data){
+  let html = escapeHtml(data.answer||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>');
+  const a = data.analysis || {};
+  const kp = (a.kpis||[]).filter(k=>!/^lignes?$/i.test(String(k.label||'').trim()));
+  if(kp.length){
+    html += '<div class="cia-kpis">' + kp.slice(0,6).map(k=>`<span>${escapeHtml(k.label)} : <b>${escapeHtml(ciaFmt(k.value))} ${escapeHtml(k.unit||'')}</b></span>`).join('') + '</div>';
+  }
+  (a.tables||[]).slice(0,2).forEach(t=>{
+    const cols = t.columns||[], rows = (t.rows||[]).slice(0,10);
+    if(!cols.length || !rows.length) return;
+    html += `<div class="cia-tbl"><table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead><tbody>` +
+      rows.map(r=>`<tr>${r.map(v=>`<td>${escapeHtml(ciaFmt(v))}</td>`).join('')}</tr>`).join('') + '</tbody></table></div>';
+  });
+  (data.errors||[]).forEach(e=>{ html += `<div class="cia-muted">⚠️ ${escapeHtml(e)}</div>`; });
+  if(data.moteur) html += `<div class="cia-muted" style="margin-top:4px;">${escapeHtml(data.moteur)}</div>`;
+  return html;
+}
+async function ciaAsk(ev){
+  if(ev) ev.preventDefault();
+  const input = document.getElementById('ciaInput'), send = document.getElementById('ciaSend');
+  const text = input.value.trim(); if(!text) return;
+  ciaAdd('u', escapeHtml(text)); input.value = ''; send.disabled = true;
+  document.getElementById('ciaSugg').innerHTML = '';
+  const wait = ciaAdd('a cia-muted', 'Je réfléchis… / Mieritreritra…');
+  try{
+    try{ await ciaPushAll(false); }catch(e){ /* on pose quand même la question avec les dernières données */ }
+    const data = await ciaFetch('/api/v1/chat', { method:'POST', body:{ application_id: CIA.app, message: text, conversation_id: CIA_CONV } });
+    CIA_CONV = data.conversation_id || CIA_CONV;
+    wait.className = 'cia-m cia-a'; wait.innerHTML = ciaRender(data);
+  }catch(e){
+    wait.className = 'cia-m cia-a'; wait.textContent = '⚠️ ' + e.message;
+  }finally{
+    send.disabled = false;
+    const m = document.getElementById('ciaMsgs'); m.scrollTop = m.scrollHeight;
+  }
+}
+
+/* Affiche/cache la bulle selon la personne connectée, et envoie les données régulièrement */
+setInterval(()=>{
+  try{
+    ciaUpdateBubble();
+    if(SESSION.user && ciaCanUse()) ciaPushAll(false).catch(()=>{});
+  }catch(e){}
+}, 60*1000);
+setTimeout(()=>{ try{ ciaUpdateBubble(); }catch(e){} }, 300);
+document.addEventListener('click', ()=>{ try{ ciaUpdateBubble(); }catch(e){} }, true);
+
 if(SYNC.enabled) startSyncLoop();
 tryRestoreSession();
 

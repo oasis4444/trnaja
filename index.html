@@ -443,6 +443,25 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .cia-hr{border:none;border-top:1px solid var(--line);margin:8px 0;}
 .cia-ul{margin:4px 0 4px 18px;padding:0;}
 .cia-ul li{margin:2px 0;}
+.cia-panel.big{width:min(980px,calc(100vw - 32px));height:min(760px,calc(100vh - 110px));}
+.cia-body{flex:1;display:flex;min-height:0;}
+.cia-main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.cia-side{display:none;width:240px;flex:0 0 240px;border-right:1px solid var(--line);overflow-y:auto;padding:8px;background:#fff;}
+.cia-panel.side .cia-side{display:block;}
+.cia-panel.side:not(.big) .cia-side{width:100%;flex:1 1 auto;border-right:none;}
+.cia-panel.side:not(.big) .cia-main{display:none;}
+.cia-side input{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-size:13px;box-sizing:border-box;}
+.cia-st{display:flex;justify-content:space-between;align-items:center;margin:10px 0 4px;font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;}
+.cia-st button{border:none;background:var(--green-100);color:var(--green-800);border-radius:8px;padding:2px 8px;font-size:12px;cursor:pointer;}
+.cia-si{display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px;}
+.cia-si:hover{background:var(--green-50);} .cia-si.on{background:var(--green-100);font-weight:700;}
+.cia-si .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cia-si .x{visibility:hidden;border:none;background:none;cursor:pointer;padding:0 2px;font-size:12px;}
+.cia-si:hover .x{visibility:visible;}
+.cia-proj{font-weight:400;font-size:12px;opacity:.85;}
+.cia-fb{display:flex;gap:6px;margin-top:6px;}
+.cia-fb button{border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;padding:1px 7px;font-size:13px;}
+.cia-fb button.on{background:var(--green-100);border-color:var(--green-400);}
 .cia-kpis{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .cia-kpis span{background:var(--green-100);border-radius:8px;padding:3px 8px;font-size:12px;}
 .cia-tbl{margin-top:8px;overflow-x:auto;}
@@ -3949,6 +3968,13 @@ loadSyncConfig();
 const CIA_KEY = 'trnaja_cia';
 let CIA = (()=>{ try{ return JSON.parse(localStorage.getItem(CIA_KEY)||'null') || {}; }catch(e){ return {}; } })();
 let CIA_CONV = null;
+let CIA_PROJECT = null;      // projet choisi (comme les projets de ChatGPT)
+let CIA_PROJECTS = [];
+function ciaUser(){ return SESSION.user ? SESSION.user.username : ''; }
+function ciaQS(extra){
+  const p = new URLSearchParams(Object.assign({ application_id: CIA.app, utilisateur: ciaUser() }, extra||{}));
+  return p.toString();
+}
 let CIA_PUSHING = null;
 const CIA_PUSH_EVERY = 10*60*1000; // 10 minutes
 
@@ -4032,7 +4058,14 @@ function ciaBuildDatasets(){
     date: ciaDay(s.closedAt||s.openedAt||s.date), ouvert_par: s.openedBy||'', fond: num(s.openingAmount),
     reel: num(s.closingAmountReal), theorique: num(s.theoretical), ecart: num(s.difference), statut: s.status||'open',
   }));
-  return { ventes, lignes_ventes: lignes, produits, credits, depenses, caisse };
+  const typesMv = {entry:'entrée', import:'import', transfer:'transfert', adjust:'ajustement', inventory:'inventaire',
+    cancel_sale:'annulation vente', cancel_entry:'annulation entrée', loss:'perte'};
+  const sName = id => { try{ return id ? stockName(id) : ''; }catch(e){ return ''; } };
+  const mouvements = (DB.stockMovements||[]).filter(m=>m.type!=='sale' && recent(m.date)).map(m=>({
+    date: ciaDay(m.date), type: typesMv[m.type] || m.type || '', produit: m.productName || (prodById[m.productId]||{}).name || '',
+    quantite: num(m.qty), depuis: sName(m.fromStock), vers: sName(m.toStock), utilisateur: m.userName || '', note: m.note || '',
+  }));
+  return { ventes, lignes_ventes: lignes, produits, credits, depenses, caisse, mouvements };
 }
 
 async function ciaPushAll(force){
@@ -4135,25 +4168,124 @@ function ciaEnsureUi(){
   const p = document.createElement('div');
   p.id = 'ciaPanel'; p.className = 'cia-panel';
   p.innerHTML = `
-    <div class="cia-head"><span>🤖 Assistant IA</span>
-      <span><button class="cia-x" title="Nouvelle conversation" onclick="ciaNew()">↺</button><button class="cia-x" title="Fermer" onclick="ciaToggle(false)">✕</button></span></div>
-    <div class="cia-msgs" id="ciaMsgs"></div>
-    <div class="cia-sugg" id="ciaSugg"></div>
-    <form class="cia-form" onsubmit="ciaAsk(event)">
-      <input id="ciaInput" autocomplete="off" placeholder="Posez votre question… / Apetraho ny fanontanianao…">
-      <button class="btn btn-primary" id="ciaSend" type="submit">➤</button>
-    </form>`;
+    <div class="cia-head"><span>🤖 Assistant IA <span id="ciaProjName" class="cia-proj"></span></span>
+      <span><button class="cia-x" title="Historique et projets" onclick="ciaSide()">🕘</button><button class="cia-x" title="Nouvelle conversation" onclick="ciaNew()">＋</button><button class="cia-x" title="Agrandir" onclick="ciaBig()">⤢</button><button class="cia-x" title="Fermer" onclick="ciaToggle(false)">✕</button></span></div>
+    <div class="cia-body">
+      <div class="cia-side" id="ciaSideBox">
+        <input id="ciaSearch" type="search" placeholder="🔎 Rechercher / Hitady…" oninput="clearTimeout(window._ciaT); window._ciaT=setTimeout(ciaLoadHistory,300)">
+        <div class="cia-st"><span>📁 Projets</span><button type="button" onclick="ciaEditProject()">＋ Nouveau</button></div>
+        <div id="ciaProjects"></div>
+        <div class="cia-st"><span>🕘 Historique</span></div>
+        <div id="ciaConvs"></div>
+      </div>
+      <div class="cia-main">
+        <div class="cia-msgs" id="ciaMsgs"></div>
+        <div class="cia-sugg" id="ciaSugg"></div>
+        <form class="cia-form" onsubmit="ciaAsk(event)">
+          <input id="ciaInput" autocomplete="off" placeholder="Posez votre question… / Apetraho ny fanontanianao…">
+          <button class="btn btn-primary" id="ciaSend" type="submit">➤</button>
+        </form>
+      </div>
+    </div>`;
   document.body.appendChild(b); document.body.appendChild(p);
+  try{ if(localStorage.getItem('trnaja_cia_big')==='1') p.classList.add('big'); }catch(e){}
   ciaNew();
+}
+function ciaBig(){
+  const p = document.getElementById('ciaPanel'); p.classList.toggle('big');
+  try{ localStorage.setItem('trnaja_cia_big', p.classList.contains('big')?'1':'0'); }catch(e){}
+}
+function ciaSide(force){
+  const p = document.getElementById('ciaPanel');
+  const open = force===undefined ? !p.classList.contains('side') : force;
+  p.classList.toggle('side', open);
+  if(open) ciaLoadHistory();
 }
 function ciaNew(){
   CIA_CONV = null;
   const m = document.getElementById('ciaMsgs'); if(!m) return;
   m.innerHTML = '';
-  ciaAdd('a', 'Bonjour ! Posez-moi une question sur votre boutique. <br><span class="cia-muted">Manao ahoana ! Afaka manontany amin\'ny teny malagasy koa ianao.</span>');
+  ciaAdd('a', 'Bonjour ! Posez-moi une question sur votre boutique, ou demandez « que dois-je faire aujourd\'hui ? ». <br><span class="cia-muted">Manao ahoana ! Afaka manontany amin\'ny teny malagasy koa ianao : « Inona no tokony hataoko androany ? »</span>');
   const s = document.getElementById('ciaSugg');
-  const sugg = ['Ventes des 7 derniers jours', 'Bénéfice par produit ce mois-ci', 'Inona no tahiry ho lany ?', 'Iza no mitrosa ?'];
+  const sugg = ['Inona no tokony hataoko androany ?', 'Ahoana ny raharaha androany ?', 'Bénéfice par produit ce mois-ci', 'Iza no mitrosa ?'];
   s.innerHTML = sugg.map(q=>`<button type="button" onclick="ciaQuick(this)">${escapeHtml(q)}</button>`).join('');
+  ciaShowProject();
+}
+function ciaShowProject(){
+  const pr = CIA_PROJECTS.find(x=>x.id===CIA_PROJECT);
+  const el = document.getElementById('ciaProjName'); if(el) el.textContent = pr ? '· 📁 ' + pr.nom : '';
+}
+async function ciaLoadHistory(){
+  if(!ciaConnected()) return;
+  const q = (document.getElementById('ciaSearch')||{}).value || '';
+  try{
+    CIA_PROJECTS = await ciaFetch('/api/v1/projects?' + ciaQS());
+    const extra = {}; if(CIA_PROJECT) extra.project_id = CIA_PROJECT; if(q.trim()) extra.q = q.trim();
+    const convs = await ciaFetch('/api/v1/conversations?' + ciaQS(extra));
+    const pl = document.getElementById('ciaProjects');
+    pl.innerHTML = `<div class="cia-si ${CIA_PROJECT?'':'on'}" onclick="ciaPickProject(null)"><span class="t">Toutes les conversations</span></div>` +
+      CIA_PROJECTS.map(p=>`<div class="cia-si ${CIA_PROJECT===p.id?'on':''}" title="${escapeHtml(p.instructions||'')}" onclick="ciaPickProject(${p.id})">
+        <span class="t">📁 ${escapeHtml(p.nom)}</span><span class="cia-muted">${p.conversations||''}</span>
+        <button class="x" title="Modifier" onclick="event.stopPropagation();ciaEditProject(${p.id})">✏️</button>
+        <button class="x" title="Supprimer" onclick="event.stopPropagation();ciaDelProject(${p.id})">🗑</button></div>`).join('');
+    const cl = document.getElementById('ciaConvs');
+    cl.innerHTML = convs.length ? convs.map(c=>`<div class="cia-si ${CIA_CONV===c.id?'on':''}" title="${escapeHtml((c.projet?'📁 '+c.projet+' · ':'') + (c.updated_at||''))}" onclick="ciaOpen('${c.id}')">
+        <span class="t">${escapeHtml(c.titre||'(sans titre)')}</span>
+        <button class="x" title="Renommer" onclick="event.stopPropagation();ciaRename('${c.id}')">✏️</button>
+        <button class="x" title="Ranger dans un projet" onclick="event.stopPropagation();ciaMove('${c.id}')">📁</button>
+        <button class="x" title="Supprimer" onclick="event.stopPropagation();ciaDelConv('${c.id}')">🗑</button></div>`).join('')
+      : '<div class="cia-muted" style="padding:6px">Aucune conversation.</div>';
+    ciaShowProject();
+  }catch(e){ toast(e.message, 'err'); }
+}
+function ciaPickProject(id){ CIA_PROJECT = id; ciaNew(); ciaLoadHistory(); }
+async function ciaEditProject(id){
+  const pr = CIA_PROJECTS.find(x=>x.id===id);
+  const nom = prompt('Nom du projet / Anaran\'ny tetikasa :', pr ? pr.nom : ''); if(!nom) return;
+  const ins = prompt('Consignes permanentes pour l\'IA (facultatif)\nToromarika maharitra ho an\'ny IA (tsy voatery) :\nex. « Valio amin\'ny teny malagasy, fohy »', pr ? pr.instructions : '');
+  try{
+    const body = { application_id: CIA.app, nom, instructions: ins||'', utilisateur: ciaUser() };
+    const r = pr ? await ciaFetch('/api/v1/projects/'+id, { method:'PUT', body }) : await ciaFetch('/api/v1/projects', { method:'POST', body });
+    if(!pr){ CIA_PROJECT = r.id; ciaNew(); }
+    ciaLoadHistory();
+  }catch(e){ toast(e.message, 'err'); }
+}
+async function ciaDelProject(id){
+  if(!confirm('Supprimer ce projet ? (les conversations sont gardées)')) return;
+  try{ await ciaFetch('/api/v1/projects/'+id+'?'+ciaQS(), { method:'DELETE' }); if(CIA_PROJECT===id) CIA_PROJECT=null; ciaLoadHistory(); }
+  catch(e){ toast(e.message, 'err'); }
+}
+async function ciaRename(id){
+  const t = prompt('Nouveau titre / Lohateny vaovao :'); if(!t) return;
+  try{ await ciaFetch('/api/v1/conversations/'+id, { method:'PATCH', body:{ titre:t, utilisateur: ciaUser() } }); ciaLoadHistory(); }
+  catch(e){ toast(e.message, 'err'); }
+}
+async function ciaMove(id){
+  if(!CIA_PROJECTS.length){ toast('Créez d\'abord un projet (＋ Nouveau).', 'warn'); return; }
+  const n = prompt('Numéro du projet :\n' + CIA_PROJECTS.map((p,i)=>(i+1)+'. '+p.nom).join('\n') + '\n0. Sans projet', '1');
+  if(n===null) return;
+  const pr = CIA_PROJECTS[Number(n)-1];
+  try{ await ciaFetch('/api/v1/conversations/'+id, { method:'PATCH', body: pr ? { project_id: pr.id, utilisateur: ciaUser() } : { sans_projet: true, utilisateur: ciaUser() } }); ciaLoadHistory(); }
+  catch(e){ toast(e.message, 'err'); }
+}
+async function ciaDelConv(id){
+  if(!confirm('Supprimer cette conversation ?')) return;
+  try{ await ciaFetch('/api/v1/conversations/'+id+'?'+ciaQS(), { method:'DELETE' }); if(CIA_CONV===id) ciaNew(); ciaLoadHistory(); }
+  catch(e){ toast(e.message, 'err'); }
+}
+async function ciaOpen(id){
+  try{
+    const c = await ciaFetch('/api/v1/conversations/'+id+'?'+ciaQS());
+    CIA_CONV = id;
+    const m = document.getElementById('ciaMsgs'); m.innerHTML = '';
+    document.getElementById('ciaSugg').innerHTML = '';
+    (c.messages||[]).forEach(x=>{
+      if(x.role==='user') ciaAdd('u', escapeHtml(x.content));
+      else ciaAnswer(ciaAdd('a', ''), { answer: x.content, message_id: x.id, moteur: (x.meta||{}).moteur }, (x.meta||{}).avis);
+    });
+    if(window.innerWidth < 900 || !document.getElementById('ciaPanel').classList.contains('big')) ciaSide(false);
+    ciaLoadHistory();
+  }catch(e){ toast(e.message, 'err'); }
 }
 function ciaQuick(btn){ const i = document.getElementById('ciaInput'); i.value = btn.textContent; ciaAsk(); }
 function ciaToggle(force){
@@ -4197,7 +4329,8 @@ function ciaRender(data){
   let html = ciaMd(data.answer||'');
   const a = data.analysis || {};
   // Les chiffres clés sont déjà dans la réponse : on affiche seulement le tableau détaillé
-  (a.tables||[]).slice(0,2).forEach(t=>{
+  const listInText = a.analysis_type==='decisions' || a.analysis_type==='bilan';  // déjà listé dans la réponse
+  (listInText ? [] : (a.tables||[])).slice(0,2).forEach(t=>{
     const cols = t.columns||[], rows = (t.rows||[]).slice(0,10);
     if(!cols.length || !rows.length) return;
     html += `<div class="cia-tbl"><table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead><tbody>` +
@@ -4206,6 +4339,28 @@ function ciaRender(data){
   (data.errors||[]).forEach(e=>{ html += `<div class="cia-muted">⚠️ ${escapeHtml(e)}</div>`; });
   if(data.moteur) html += `<div class="cia-muted" style="margin-top:4px;">${escapeHtml(data.moteur)}</div>`;
   return html;
+}
+function ciaAnswer(box, data, avis){
+  box.className = 'cia-m cia-a';
+  box.innerHTML = ciaRender(data);
+  if(!data.message_id) return;
+  const bar = document.createElement('div'); bar.className = 'cia-fb';
+  bar.innerHTML = `<button type="button" class="${avis==='bon'?'on':''}" title="Valiny tsara : tadidin'ny IA / Bonne réponse">👍</button>`+
+                  `<button type="button" class="${avis==='mauvais'?'on':''}" title="Valiny diso : omeo ny marina / Mauvaise réponse">👎</button>`;
+  const [up, down] = bar.querySelectorAll('button');
+  const send = async (kind, correction)=>{
+    try{
+      const r = await ciaFetch('/api/v1/chat/avis', { method:'POST', body:{ message_id: data.message_id, avis: kind, correction: correction||'', utilisateur: ciaUser() } });
+      up.classList.toggle('on', kind==='bon'); down.classList.toggle('on', kind==='mauvais');
+      toast(r.appris ? 'Misaotra ! Nianatra izany ny IA 🎓' : 'Misaotra tamin\'ny hevitrao.');
+    }catch(e){ toast(e.message, 'err'); }
+  };
+  up.onclick = ()=>send('bon');
+  down.onclick = ()=>{
+    const c = prompt('Inona no valiny marina ? (tsy voatery)\nQuelle est la bonne réponse ? (facultatif)', '');
+    if(c===null) return; send('mauvais', c);
+  };
+  box.appendChild(bar);
 }
 async function ciaAsk(ev){
   if(ev) ev.preventDefault();
@@ -4216,9 +4371,12 @@ async function ciaAsk(ev){
   const wait = ciaAdd('a cia-muted', 'Je réfléchis… / Mieritreritra…');
   try{
     try{ await ciaPushAll(false); }catch(e){ /* on pose quand même la question avec les dernières données */ }
-    const data = await ciaFetch('/api/v1/chat', { method:'POST', body:{ application_id: CIA.app, message: text, conversation_id: CIA_CONV } });
+    const isNew = !CIA_CONV;
+    const data = await ciaFetch('/api/v1/chat', { method:'POST', body:{ application_id: CIA.app, message: text, conversation_id: CIA_CONV,
+      project_id: CIA_CONV ? null : CIA_PROJECT, utilisateur: ciaUser() } });
     CIA_CONV = data.conversation_id || CIA_CONV;
-    wait.className = 'cia-m cia-a'; wait.innerHTML = ciaRender(data);
+    wait.className = 'cia-m cia-a'; ciaAnswer(wait, data);
+    if(isNew && document.getElementById('ciaPanel').classList.contains('side')) ciaLoadHistory();
   }catch(e){
     wait.className = 'cia-m cia-a'; wait.textContent = '⚠️ ' + e.message;
   }finally{

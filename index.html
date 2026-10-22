@@ -439,6 +439,10 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .cia-u{align-self:flex-end;background:var(--green-700);color:#fff;}
 .cia-a{align-self:flex-start;background:#fff;border:1px solid var(--line);color:var(--ink);}
 .cia-muted{color:var(--ink-soft);font-size:12px;}
+.cia-h{font-weight:700;margin:6px 0 2px;}
+.cia-hr{border:none;border-top:1px solid var(--line);margin:8px 0;}
+.cia-ul{margin:4px 0 4px 18px;padding:0;}
+.cia-ul li{margin:2px 0;}
 .cia-kpis{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .cia-kpis span{background:var(--green-100);border-radius:8px;padding:3px 8px;font-size:12px;}
 .cia-tbl{margin-top:8px;overflow-x:auto;}
@@ -4171,14 +4175,28 @@ function ciaAdd(kind, html){
   m.appendChild(d); m.scrollTop = m.scrollHeight;
   return d;
 }
+function ciaMd(text){
+  // Mini-markdown sûr : **gras**, titres #, listes -, lignes ---
+  let out = '', inList = false;
+  escapeHtml(text).split('\n').forEach(l=>{
+    l = l.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+    const close = ()=>{ if(inList){ out += '</ul>'; inList = false; } };
+    if(/^\s*-{3,}\s*$/.test(l)){ close(); out += '<hr class="cia-hr">'; return; }
+    const h = l.match(/^\s*#{1,6}\s+(.*)/);
+    if(h){ close(); out += '<div class="cia-h">'+h[1]+'</div>'; return; }
+    const m = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/);
+    if(m){ if(!inList){ out += '<ul class="cia-ul">'; inList = true; } out += '<li>'+m[1]+'</li>'; return; }
+    close();
+    out += l.trim() ? '<div>'+l+'</div>' : '<div style="height:6px"></div>';
+  });
+  if(inList) out += '</ul>';
+  return out;
+}
 function ciaFmt(v){ return typeof v==='number' ? v.toLocaleString('fr-FR') : String(v==null?'':v); }
 function ciaRender(data){
-  let html = escapeHtml(data.answer||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>');
+  let html = ciaMd(data.answer||'');
   const a = data.analysis || {};
-  const kp = (a.kpis||[]).filter(k=>!/^lignes?$/i.test(String(k.label||'').trim()));
-  if(kp.length){
-    html += '<div class="cia-kpis">' + kp.slice(0,6).map(k=>`<span>${escapeHtml(k.label)} : <b>${escapeHtml(ciaFmt(k.value))} ${escapeHtml(k.unit||'')}</b></span>`).join('') + '</div>';
-  }
+  // Les chiffres clés sont déjà dans la réponse : on affiche seulement le tableau détaillé
   (a.tables||[]).slice(0,2).forEach(t=>{
     const cols = t.columns||[], rows = (t.rows||[]).slice(0,10);
     if(!cols.length || !rows.length) return;

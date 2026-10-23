@@ -459,6 +459,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
 .cia-si .x{visibility:hidden;border:none;background:none;cursor:pointer;padding:0 2px;font-size:12px;}
 .cia-si:hover .x{visibility:visible;}
 .cia-proj{font-weight:400;font-size:12px;opacity:.85;}
+.cia-hbtn{font-size:13px!important;background:rgba(255,255,255,.15)!important;border-radius:8px;padding:3px 8px;}
 .cia-fb{display:flex;gap:6px;margin-top:6px;}
 .cia-fb button{border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;padding:1px 7px;font-size:13px;}
 .cia-fb button.on{background:var(--green-100);border-color:var(--green-400);}
@@ -4169,7 +4170,7 @@ function ciaEnsureUi(){
   p.id = 'ciaPanel'; p.className = 'cia-panel';
   p.innerHTML = `
     <div class="cia-head"><span>🤖 Assistant IA <span id="ciaProjName" class="cia-proj"></span></span>
-      <span><button class="cia-x" title="Historique et projets" onclick="ciaSide()">🕘</button><button class="cia-x" title="Nouvelle conversation" onclick="ciaNew()">＋</button><button class="cia-x" title="Agrandir" onclick="ciaBig()">⤢</button><button class="cia-x" title="Fermer" onclick="ciaToggle(false)">✕</button></span></div>
+      <span><button class="cia-x cia-hbtn" title="Historique et projets" onclick="ciaSide()">🕘 Historique</button><button class="cia-x" title="Nouvelle conversation" onclick="ciaNew()">＋</button><button class="cia-x" title="Agrandir" onclick="ciaBig()">⤢</button><button class="cia-x" title="Fermer" onclick="ciaToggle(false)">✕</button></span></div>
     <div class="cia-body">
       <div class="cia-side" id="ciaSideBox">
         <input id="ciaSearch" type="search" placeholder="🔎 Rechercher / Hitady…" oninput="clearTimeout(window._ciaT); window._ciaT=setTimeout(ciaLoadHistory,300)">
@@ -4188,11 +4189,12 @@ function ciaEnsureUi(){
       </div>
     </div>`;
   document.body.appendChild(b); document.body.appendChild(p);
-  try{ if(localStorage.getItem('trnaja_cia_big')==='1') p.classList.add('big'); }catch(e){}
+  try{ if(localStorage.getItem('trnaja_cia_big')==='1') p.classList.add('big', 'side'); }catch(e){}
   ciaNew();
 }
 function ciaBig(){
   const p = document.getElementById('ciaPanel'); p.classList.toggle('big');
+  if(p.classList.contains('big')){ p.classList.add('side'); ciaLoadHistory(); }
   try{ localStorage.setItem('trnaja_cia_big', p.classList.contains('big')?'1':'0'); }catch(e){}
 }
 function ciaSide(force){
@@ -4236,7 +4238,13 @@ async function ciaLoadHistory(){
         <button class="x" title="Supprimer" onclick="event.stopPropagation();ciaDelConv('${c.id}')">🗑</button></div>`).join('')
       : '<div class="cia-muted" style="padding:6px">Aucune conversation.</div>';
     ciaShowProject();
-  }catch(e){ toast(e.message, 'err'); }
+  }catch(e){
+    const old = /not found|404|introuvable/i.test(e.message||'');
+    const cl = document.getElementById('ciaConvs');
+    if(cl) cl.innerHTML = '<div class="cia-muted" style="padding:6px">⚠️ ' + (old
+      ? 'Mila havaozina ny Central IA vao misy historique : apetraho ny version 1.6.1 (na aoriana), dia avereno sokafana ity varavarankely ity.<br>Mettez à jour le Central IA (v1.6.1 ou plus) pour avoir l\'historique.'
+      : escapeHtml(e.message)) + '</div>';
+  }
 }
 function ciaPickProject(id){ CIA_PROJECT = id; ciaNew(); ciaLoadHistory(); }
 async function ciaEditProject(id){
@@ -4292,7 +4300,8 @@ function ciaToggle(force){
   const p = document.getElementById('ciaPanel'); if(!p) return;
   const open = force===undefined ? !p.classList.contains('show') : force;
   p.classList.toggle('show', open);
-  if(open){ setTimeout(()=>{ const i=document.getElementById('ciaInput'); if(i) i.focus(); }, 50); ciaPushAll(false).catch(()=>{}); }
+  if(open){ setTimeout(()=>{ const i=document.getElementById('ciaInput'); if(i) i.focus(); }, 50); ciaPushAll(false).catch(()=>{});
+    if(p.classList.contains('side')) ciaLoadHistory(); }
 }
 function ciaUpdateBubble(){
   ciaEnsureUi();

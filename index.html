@@ -4071,6 +4071,7 @@ function ciaBuildDatasets(){
 
 async function ciaPushAll(force){
   if(!ciaConnected()) throw new Error('Assistant IA non connecté.');
+  if(CIA.noPush && !force) return null;   // appareil secondaire : il pose des questions mais n'envoie pas ses données
   if(!force && CIA.lastPush && (Date.now()-CIA.lastPush) < CIA_PUSH_EVERY && CIA.lastDbStamp===ciaDbStamp()) return null;
   if(CIA_PUSHING) return CIA_PUSHING;
   CIA_PUSHING = (async()=>{
@@ -4119,7 +4120,13 @@ function renderCiaSettings(){
         <button class="btn btn-danger" onclick="ciaDisconnect()">Déconnecter</button>` : ''}
       </div>
     </div>
-    <p class="small-note" style="margin-top:14px;">Les données sont envoyées seulement au Central IA de cet ordinateur (adresse locale), automatiquement avant chaque question et toutes les 10 minutes environ.
+    ${ciaConnected() ? `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;cursor:pointer;">
+      <input type="checkbox" ${CIA.noPush?'':'checked'} onchange="ciaSetPush(this.checked)" style="margin-top:3px;">
+      <span><b>Cet appareil envoie les données de la boutique au Central IA.</b><br>
+      <span class="small-note">Laissez coché sur l'ordinateur principal de la boutique. Décochez sur les autres appareils (téléphone, 2e ordinateur)
+      s'ils n'ont pas les mêmes ventes, sinon leurs données remplaceraient celles de l'ordinateur principal.
+      Inutile si la synchronisation 🌐 Réseau est active (tous les appareils ont alors les mêmes données).</span></span></label>` : ''}
+    <p class="small-note" style="margin-top:14px;">Les données sont envoyées seulement à votre Central IA (sur ce Mac, ou par votre accès privé Tailscale), automatiquement avant chaque question et toutes les 10 minutes environ.
     Le bouton 🤖 en bas à droite ouvre le chat (administrateurs et personnes autorisées à voir les bénéfices).</p>
   </div>`;
 }
@@ -4128,11 +4135,20 @@ async function ciaConnectFromCode(){
   let info;
   try{ info = ciaDecodeCode(el ? el.value : ''); }catch(e){ toast(e.message || 'Code invalide.', 'err'); return; }
   const old = CIA; CIA = Object.assign({}, info);
+  // Central IA sur ce Mac (adresse locale) = ordinateur principal : il envoie les données.
+  // Central IA joint à distance (Tailscale…) = appareil secondaire : il pose des questions sans écraser les données.
+  CIA.noPush = !/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(CIA.url);
   try{
     toast('Connexion au Central IA…', 'warn');
-    const n = await ciaPushAll(true);
-    ciaSave(); CIA_CONV = null;
-    toast('Assistant IA connecté. ' + (n||0) + ' ligne(s) envoyée(s).');
+    if(CIA.noPush){
+      await ciaFetch('/api/v1/projects?' + ciaQS());   // vérifie l'adresse et le code
+      ciaSave(); CIA_CONV = null;
+      toast('Assistant IA connecté (cet appareil n\'envoie pas ses données : voir la case ci-dessous).');
+    }else{
+      const n = await ciaPushAll(true);
+      ciaSave(); CIA_CONV = null;
+      toast('Assistant IA connecté. ' + (n||0) + ' ligne(s) envoyée(s).');
+    }
   }catch(e){
     CIA = old; ciaSave();
     toast(e.message, 'err');
@@ -4152,6 +4168,10 @@ async function ciaSendNow(){
   try{ toast('Envoi des données…', 'warn'); const n = await ciaPushAll(true); toast((n||0) + ' ligne(s) envoyée(s) au Central IA.'); }
   catch(e){ toast(e.message, 'err'); }
   if(document.getElementById('settingsBody')) renderSettingsBody();
+}
+function ciaSetPush(on){
+  CIA.noPush = !on; ciaSave();
+  toast(on ? 'Cet appareil envoie de nouveau ses données.' : 'Cet appareil n\'envoie plus ses données (il peut toujours poser des questions).');
 }
 function ciaDisconnect(){
   CIA = {}; ciaSave(); CIA_CONV = null;

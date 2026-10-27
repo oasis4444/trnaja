@@ -4022,6 +4022,10 @@ function ciaDay(iso){
   if(isNaN(d)) return String(iso).slice(0,10);
   return localKey(d,'day');
 }
+function ciaHour(iso){
+  const d = new Date(iso); if(isNaN(d)) return '';
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
 function ciaBuildDatasets(){
   const since = new Date(); since.setDate(since.getDate()-365);
   const recent = iso => { const d = new Date(iso); return !isNaN(d) && d >= since; };
@@ -4033,6 +4037,8 @@ function ciaBuildDatasets(){
   const ventes = sales.map(s=>({
     id: s.id, numero: s.number||'', date: ciaDay(s.date), caissier: s.cashierName||'', client: s.clientName||'',
     total: num(s.total), paye: num(s.paid), statut: s.status||'valid', credit: s.isCredit?1:0,
+    heure: ciaHour(s.date), annule_par: s.cancelledBy||'', annule_le: s.cancelledAt ? ciaDay(s.cancelledAt)+' '+ciaHour(s.cancelledAt) : '',
+    motif_annulation: s.cancelReason||'',
   }));
   const lignes = [];
   sales.forEach(s=>{
@@ -4040,7 +4046,7 @@ function ciaBuildDatasets(){
       const p = prodById[it.productId] || {};
       const qty = num(it.qty), montant = num(it.unitPrice)*qty;
       const cout = num(p.purchasePrice)*num(it.unitQtyInBase||1)*qty;
-      lignes.push({ vente_id: s.id, date: ciaDay(s.date), produit: it.name || p.name || '', categorie: catName(p.categoryId),
+      lignes.push({ vente_id: s.id, date: ciaDay(s.date), caissier: s.cashierName||'', produit: it.name || p.name || '', categorie: catName(p.categoryId),
         quantite: qty, prix_unitaire: num(it.unitPrice), montant, cout, marge: montant-cout, statut: s.status||'valid' });
     });
   });
@@ -4059,14 +4065,19 @@ function ciaBuildDatasets(){
     date: ciaDay(s.closedAt||s.openedAt||s.date), ouvert_par: s.openedBy||'', fond: num(s.openingAmount),
     reel: num(s.closingAmountReal), theorique: num(s.theoretical), ecart: num(s.difference), statut: s.status||'open',
   }));
-  const typesMv = {entry:'entrée', import:'import', transfer:'transfert', adjust:'ajustement', inventory:'inventaire',
+  const typesMv = {entry:'entrée', import:'import', transfer:'transfert', transfer_out:'transfert', adjust:'ajustement',
+    inventory:'inventaire', inventory_adjust:'inventaire',
     cancel_sale:'annulation vente', cancel_entry:'annulation entrée', loss:'perte'};
   const sName = id => { try{ return id ? stockName(id) : ''; }catch(e){ return ''; } };
   const mouvements = (DB.stockMovements||[]).filter(m=>m.type!=='sale' && recent(m.date)).map(m=>({
     date: ciaDay(m.date), type: typesMv[m.type] || m.type || '', produit: m.productName || (prodById[m.productId]||{}).name || '',
     quantite: num(m.qty), depuis: sName(m.fromStock), vers: sName(m.toStock), utilisateur: m.userName || '', note: m.note || '',
   }));
-  return { ventes, lignes_ventes: lignes, produits, credits, depenses, caisse, mouvements };
+  // Journal (Historique) : qui a fait quoi et quand — sert au traçage anti-triche du Central IA
+  const journal = (DB.history||[]).filter(h=>recent(h.date)).map(h=>({
+    date: ciaDay(h.date), heure: ciaHour(h.date), utilisateur: h.userName||'', action: h.action||'', details: String(h.details||'').slice(0,300),
+  }));
+  return { ventes, lignes_ventes: lignes, produits, credits, depenses, caisse, mouvements, journal };
 }
 
 async function ciaPushAll(force){
@@ -4093,7 +4104,7 @@ async function ciaPushAll(force){
 function ciaDbStamp(){
   return [(DB.sales||[]).length, (DB.products||[]).length, (DB.credits||[]).length, (DB.expenses||[]).length,
           (DB.cashSessions||[]).length, (DB.sales||[]).filter(s=>s.status==='cancelled').length,
-          (DB.credits||[]).reduce((a,c)=>a+(Number(c.remaining)||0),0), JSON.stringify(DB.stockLevels||{}).length].join('|');
+          (DB.credits||[]).reduce((a,c)=>a+(Number(c.remaining)||0),0), JSON.stringify(DB.stockLevels||{}).length, (DB.history||[]).length].join('|');
 }
 
 /* ---------- Onglet Paramètres ---------- */
@@ -4229,7 +4240,7 @@ function ciaNew(){
   m.innerHTML = '';
   ciaAdd('a', 'Bonjour ! Posez-moi une question sur votre boutique, ou demandez « que dois-je faire aujourd\'hui ? ». <br><span class="cia-muted">Manao ahoana ! Afaka manontany amin\'ny teny malagasy koa ianao : « Inona no tokony hataoko androany ? »</span>');
   const s = document.getElementById('ciaSugg');
-  const sugg = ['Inona no tokony hataoko androany ?', 'Ahoana ny raharaha androany ?', 'Bénéfice par produit ce mois-ci', 'Iza no mitrosa ?'];
+  const sugg = ['Inona no tokony hataoko androany ?', 'Ahoana ny raharaha androany ?', 'Misy hosoka ve ?', 'Iza no mitrosa ?'];
   s.innerHTML = sugg.map(q=>`<button type="button" onclick="ciaQuick(this)">${escapeHtml(q)}</button>`).join('');
   ciaShowProject();
 }

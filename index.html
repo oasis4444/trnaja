@@ -474,7 +474,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div class="mark"><img id="sidebarLogoImg" alt="TR Naja"></div>
-      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.2</div></div>
+      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.3</div></div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
     <div class="sidebar-user">
@@ -2733,8 +2733,8 @@ function render_salesHistory(c){
         <option value="">Tous statuts</option><option value="valid">Valides</option><option value="cancelled">Annulées</option>
       </select>
       <select class="filter" id="salePeriodFilter" onchange="renderSalesTable()">
+        <option value="day" selected>Aujourd'hui</option>
         <option value="all">Toute la période</option>
-        <option value="day">Aujourd'hui</option>
         <option value="month">Ce mois-ci</option>
         <option value="year">Cette année</option>
       </select>

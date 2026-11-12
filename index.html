@@ -474,7 +474,7 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div class="mark"><img id="sidebarLogoImg" alt="TR Naja"></div>
-      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.3</div></div>
+      <div class="txt"><div>TR Naja</div><div>Gestion demi-gros · v2.4</div></div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
     <div class="sidebar-user">
@@ -1892,7 +1892,7 @@ function renderPurchasesTab(body){
         <td>${p.lines.map(l=>escapeHtml(l.name)+' ×'+fmtNum(l.qty)+' '+escapeHtml(l.unitName)).join(', ')}</td>
         <td style="text-align:right;">${fmtAr(p.total)}</td><td style="text-align:right;">${fmtAr(p.paid)}</td>
         <td style="text-align:right;color:${p.total-p.paid>0?'var(--red)':'inherit'};">${fmtAr(Math.max(0,p.total-p.paid))}</td><td>${escapeHtml(p.userName||'')}</td>
-        <td style="white-space:nowrap;">${p.status==='cancelled'?'<span class="badge badge-red">Annulé</span>':`<button class="btn btn-ghost btn-sm" onclick="printPurchase('${p.id}')">🖨️</button> <button class="btn btn-danger btn-sm" onclick="openCancelPurchaseModal('${p.id}')">Annuler</button>`}
+        <td style="white-space:nowrap;">${p.status==='cancelled'?'<span class="badge badge-red">Annulé</span>':`${p.total-p.paid>0?`<button class="btn btn-primary btn-sm" onclick="openPayPurchaseModal('${p.id}')">💰 Payer</button> `:''}<button class="btn btn-ghost btn-sm" onclick="printPurchase('${p.id}')">🖨️</button> <button class="btn btn-danger btn-sm" onclick="openCancelPurchaseModal('${p.id}')">Annuler</button>`}
         <button class="btn btn-icon btn-sm" onclick="showPurchase('${p.id}')">👁️</button></td></tr>`).join('') : `<tr><td colspan="9"><div class="empty-state"><div class="em-ico">🧾</div>Aucun achat enregistré.</div></td></tr>`}</tbody>
     </table></div></div>`;
 }
@@ -1988,7 +1988,34 @@ function purchaseDocHtml(p){
     <table><thead><tr><th>Produit</th><th>Unité</th><th style="text-align:right;">Qté</th><th style="text-align:right;">Prix unitaire</th><th style="text-align:right;">Montant</th></tr></thead>
     <tbody>${p.lines.map(l=>`<tr><td>${escapeHtml(l.name)}</td><td>${escapeHtml(l.unitName)}</td><td style="text-align:right;">${fmtNum(l.qty)}</td><td style="text-align:right;">${fmtAr(l.unitPrice)}</td><td style="text-align:right;">${fmtAr(l.total)}</td></tr>`).join('')}</tbody></table>
     <table style="width:50%;margin-left:auto;"><tr><td><b>Total</b></td><td style="text-align:right;"><b>${fmtAr(p.total)}</b></td></tr><tr><td>Payé</td><td style="text-align:right;">${fmtAr(p.paid)}</td></tr><tr><td>Reste dû</td><td style="text-align:right;">${fmtAr(Math.max(0,p.total-p.paid))}</td></tr></table>
+    ${(p.payments&&p.payments.length)?`<p style="font-size:12px;margin:8px 0 0;"><b>Paiements ultérieurs :</b> ${p.payments.map(x=>fmtDateOnly(x.date)+' — '+fmtAr(x.amount)+(x.note?' ('+escapeHtml(x.note)+')':'')).join(' ; ')}</p>`:''}
     <p style="font-size:12px;color:#555;">Enregistré par ${escapeHtml(p.userName||'')}${p.status==='cancelled'?' — <b>ACHAT ANNULÉ</b>':''}</p>`;
+}
+function openPayPurchaseModal(id){
+  const p = byId(DB.purchases,id), rest = Math.max(0, p.total-p.paid);
+  openModal({ title:'Payer le fournisseur — achat '+p.number, bodyHtml:`
+    <p><b>${escapeHtml(p.supplierName)}</b> — total ${fmtAr(p.total)}, déjà payé ${fmtAr(p.paid)}, <b style="color:var(--red);">reste à payer ${fmtAr(rest)}</b>.</p>
+    <div class="form-grid">
+      <div class="field"><label>Montant payé maintenant (Ar) *</label><input type="number" id="ppAmount" min="1" max="${rest}" value="${rest}"></div>
+      <div class="field"><label>Date du paiement</label><input type="date" id="ppDate" value="${todayStr()}"></div>
+      <div class="field full"><label>Note (facultatif)</label><input id="ppNote" placeholder="ex : espèces, virement, chèque..."></div>
+    </div>`,
+    footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="savePurchasePayment('${id}')">Enregistrer le paiement</button>` });
+}
+function savePurchasePayment(id){
+  const p = byId(DB.purchases,id); if(!p || p.status==='cancelled') return;
+  const rest = Math.max(0, p.total-p.paid);
+  const amt = Math.round(parseFloat(document.getElementById('ppAmount').value)||0);
+  if(amt<=0){ toast('Indiquez un montant.', 'err'); return; }
+  if(amt>rest){ toast('Le montant dépasse le reste dû ('+fmtAr(rest)+').', 'err'); return; }
+  const dateVal = document.getElementById('ppDate').value || todayStr();
+  const when = dateVal===todayStr() ? nowISO() : new Date(dateVal+'T12:00:00').toISOString();
+  if(!Array.isArray(p.payments)) p.payments = [];
+  p.payments.push({ id:uid('pp'), date:when, amount:amt, note:document.getElementById('ppNote').value.trim(), userName:SESSION.user.username });
+  p.paid = p.paid + amt;
+  logHistory('Paiement fournisseur', `${p.number} — ${p.supplierName} — ${fmtAr(amt)} (reste ${fmtAr(Math.max(0,p.total-p.paid))})`);
+  if(!saveDB()) return;
+  closeModal(); refresh(); toast('Paiement enregistré. Reste dû : '+fmtAr(Math.max(0,p.total-p.paid)));
 }
 function showPurchase(id){ const p = byId(DB.purchases,id); openModal({ title:'Achat '+p.number, large:true, bodyHtml: `<div class="pdf-doc" style="padding:0;">${purchaseDocHtml(p)}</div>`, footHtml:`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button><button class="btn btn-primary" onclick="printPurchase('${id}')">🖨️ Imprimer</button>` }); }
 function printPurchase(id){ closeModal(); printPDFDoc('Bon d’achat fournisseur', DB.settings.shopName||'TR Naja', purchaseDocHtml(byId(DB.purchases,id))); }

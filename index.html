@@ -500,6 +500,8 @@ input:checked + .slider-tg:before{transform:translateX(18px);}
       <div class="login-foot">
         <button class="link-btn" onclick="App.showForgot()">Mot de passe oublié ?</button>
       </div>
+      <p class="small-note" style="margin-top:12px;text-align:center;opacity:.8;">📋 Fampahafantarana : voarakitra ny fotoana fiasana sy ny asa atao ao amin'ny logiciel (fanaraha-maso ny asa).<br>
+      Le temps de travail et les actions dans ce logiciel sont enregistrés (suivi d'activité).</p>
     </div>
   </div>
 </div>
@@ -4240,7 +4242,8 @@ function ciaNew(){
   m.innerHTML = '';
   ciaAdd('a', 'Bonjour ! Posez-moi une question sur votre boutique, ou demandez « que dois-je faire aujourd\'hui ? ». <br><span class="cia-muted">Manao ahoana ! Afaka manontany amin\'ny teny malagasy koa ianao : « Inona no tokony hataoko androany ? »</span>');
   const s = document.getElementById('ciaSugg');
-  const sugg = ['Inona no tokony hataoko androany ?', 'Ahoana ny raharaha androany ?', 'Misy hosoka ve ?', 'Iza no mitrosa ?'];
+  const sugg = isAdmin() ? ['Inona no tokony hataoko androany ?', 'Inona no ataon\'ny mpiasa ankehitriny ?', 'Misy hosoka ve ?', 'Iza no mitrosa ?']
+                         : ['Inona no tokony hataoko androany ?', 'Ahoana ny raharaha androany ?', 'Iza no mitrosa ?'];
   s.innerHTML = sugg.map(q=>`<button type="button" onclick="ciaQuick(this)">${escapeHtml(q)}</button>`).join('');
   ciaShowProject();
 }
@@ -4406,11 +4409,18 @@ async function ciaAsk(ev){
   if(ev) ev.preventDefault();
   const input = document.getElementById('ciaInput'), send = document.getElementById('ciaSend');
   const text = input.value.trim(); if(!text) return;
+  // Suivi du personnel et contrôle anti-triche : réservés aux administrateurs
+  if(!isAdmin() && /mpiasa|hosoka|triche|fraude|travaill|pr[ée]sence|qui a ouvert|qui a ferm|nanokatra|nanidy|youtube|employ|caissier|vendeur|nahalafo/i.test(text)){
+    ciaAdd('u', escapeHtml(text)); input.value = '';
+    ciaAdd('a', 'Ny tompon\'andraikitra (administrateur) ihany no afaka mijery ny fanaraha-maso ny mpiasa. / Réservé aux administrateurs.');
+    return;
+  }
   ciaAdd('u', escapeHtml(text)); input.value = ''; send.disabled = true;
   document.getElementById('ciaSugg').innerHTML = '';
   const wait = ciaAdd('a cia-muted', 'Je réfléchis… / Mieritreritra…');
   try{
     try{ await ciaPushAll(false); }catch(e){ /* on pose quand même la question avec les dernières données */ }
+    try{ await ciaPushPresence(); }catch(e){}
     const isNew = !CIA_CONV;
     const data = await ciaFetch('/api/v1/chat', { method:'POST', body:{ application_id: CIA.app, message: text, conversation_id: CIA_CONV,
       project_id: CIA_CONV ? null : CIA_PROJECT, utilisateur: ciaUser() } });
@@ -4424,6 +4434,41 @@ async function ciaAsk(ev){
     const m = document.getElementById('ciaMsgs'); m.scrollTop = m.scrollHeight;
   }
 }
+
+/* ---------- Suivi d'activité (présence) ----------
+   Chaque minute, si quelqu'un est connecté : « actif » (logiciel au premier plan + utilisé dans les 2 dernières minutes),
+   « inactif » (logiciel affiché mais personne ne s'en sert), « ailleurs » (autre onglet / autre application).
+   Le logiciel ne voit PAS ce que la personne fait ailleurs (sites, vidéos…) : seulement qu'elle n'est pas dans TR Naja. */
+const CIA_PRES_KEY = 'trnaja_cia_presence';
+let CIA_LAST_INPUT = Date.now();
+['mousemove','mousedown','keydown','touchstart','scroll','wheel'].forEach(ev=>document.addEventListener(ev, ()=>{ CIA_LAST_INPUT = Date.now(); }, {passive:true, capture:true}));
+function ciaDeviceId(){
+  try{
+    let id = localStorage.getItem('trnaja_device_id');
+    if(!id){ id = 'poste-' + Math.random().toString(36).slice(2,7); localStorage.setItem('trnaja_device_id', id); }
+    return id;
+  }catch(e){ return 'poste'; }
+}
+function ciaPresenceRows(){ try{ return JSON.parse(localStorage.getItem(CIA_PRES_KEY)||'[]'); }catch(e){ return []; } }
+function ciaPresenceTick(){
+  if(!SESSION.user || !ciaConnected()) return;
+  const visible = document.visibilityState === 'visible' && document.hasFocus();
+  const etat = !visible ? 'ailleurs' : (Date.now() - CIA_LAST_INPUT < 2*60*1000 ? 'actif' : 'inactif');
+  const d = new Date();
+  const rows = ciaPresenceRows();
+  rows.push({ date: localKey(d,'day'), heure: ciaHour(d.toISOString()), utilisateur: SESSION.user.username,
+              nom: SESSION.user.fullName || SESSION.user.username, etat, appareil: ciaDeviceId() });
+  try{ localStorage.setItem(CIA_PRES_KEY, JSON.stringify(rows.slice(-20000))); }catch(e){}
+}
+async function ciaPushPresence(){
+  const rows = ciaPresenceRows();
+  if(!rows.length || !ciaConnected()) return 0;
+  await ciaFetch('/api/v1/data/presence', { method:'POST', body:{ application_id: CIA.app, mode:'ajouter', rows } });
+  try{ localStorage.setItem(CIA_PRES_KEY, JSON.stringify(ciaPresenceRows().slice(rows.length))); }catch(e){}
+  return rows.length;
+}
+setInterval(()=>{ try{ ciaPresenceTick(); }catch(e){} }, 60*1000);
+setInterval(()=>{ ciaPushPresence().catch(()=>{}); }, 5*60*1000);
 
 /* Affiche/cache la bulle selon la personne connectée, et envoie les données régulièrement */
 setInterval(()=>{
